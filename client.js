@@ -27,7 +27,10 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function ApprovalCard({ item, decide }) {
+    function ApprovalCard({ item, decide, grant, grantState, onViewRules }) {
+      const state = grantState ?? {};
+      const busy = state.loading;
+      const generated = Array.isArray(state.rules) ? state.rules : null;
       return h(Card, {
         title: '待审批命令',
         sub: item.createdAt ? new Date(item.createdAt).toLocaleString() : '',
@@ -40,12 +43,19 @@ window.__ModuleLoader__.load({
             ? h('span', { style: styles.muted }, '整段命令需人审批')
             : (item.decision?.segments ?? []).filter((s) => s.verdict !== 'auto-allow').map((s, i) => h('div', { key: i, style: styles.segment }, `${s.text}`)),
         ),
-        h('div', { style: styles.actions },
+        state.error && h('div', { style: styles.grantError }, h('strong', null, '规则生成失败：'), h('span', null, state.error), h('div', { style: styles.actions }, h(Button, { onClick: () => grant(item) }, '重试'))),
+        generated && generated.length > 0 && h('div', { style: styles.grantResult },
+          h('div', { style: styles.grantTitle }, `已生成并锁定 ${generated.length} 条放行规则`),
+          generated.map((rule, i) => h(RuleRow, { key: rule.id ?? i, rule, index: i, compact: true })),
+          h('div', { style: styles.actions }, h(Button, { primary: true, onClick: () => onViewRules(generated) }, '在规则页查看')),
+        ),
+        !generated && !busy && h('div', { style: styles.actions },
           h(Button, { onClick: () => decide(item.id, 'allow', 'once') }, '仅此次'),
           h(Button, { onClick: () => decide(item.id, 'allow', 'session') }, '本会话'),
-          h(Button, { primary: true, onClick: () => decide(item.id, 'allow', 'permanent') }, '长期并写入规则'),
+          h(Button, { primary: true, onClick: () => grant(item) }, '长期并锁定规则'),
           h(Button, { onClick: () => decide(item.id, 'deny', 'once') }, '拒绝'),
         ),
+        busy && h('div', { style: styles.actions }, h(Button, { primary: true, disabled: true }, '正在生成并锁定规则…')),
       );
     }
 
@@ -57,18 +67,19 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function RuleRow({ rule, index }) {
-      return h('div', { style: styles.ruleRow },
+    function RuleRow({ rule, index, compact, highlight }) {
+      return h('div', { style: highlight ? { ...styles.ruleRow, ...styles.ruleRowHighlight } : styles.ruleRow, 'data-rule-id': rule.id ?? '' },
         h('div', { style: styles.ruleIndex }, String(index + 1).padStart(2, '0')),
         h('div', { style: styles.ruleBody },
           h('div', { style: styles.ruleHeader },
             h('strong', { style: styles.ruleId }, rule.id ?? '未命名规则'),
             h('span', { style: rule.effect === 'deny' ? styles.denyTag : styles.allowTag }, rule.effect === 'deny' ? '拒绝' : '放行'),
+            highlight && h('span', { style: styles.newTag }, '新'),
           ),
           h('div', { style: styles.ruleDetails },
             h('span', null, `程序：${rule.program ?? '*'}`),
             h('span', null, `参数：${formatArgs(rule.args)}`),
-            h('span', null, `作用域：${rule.scope ?? '默认'}`),
+            !compact && h('span', null, `作用域：${rule.scope ?? '默认'}`),
           ),
         ),
       );
@@ -91,6 +102,8 @@ window.__ModuleLoader__.load({
       const [preview, setPreview] = React.useState(null);
       const [ruleQuery, setRuleQuery] = React.useState('');
       const [confirming, setConfirming] = React.useState(false);
+      const [grants, setGrants] = React.useState({});
+      const [focusRuleIds, setFocusRuleIds] = React.useState([]);
       const refresh = React.useCallback(() => fetch(`${API}/state`).then((r) => r.json()).then((next) => {
         const safe = {
           queue: { pending: Array.isArray(next?.queue?.pending) ? next.queue.pending : [], history: Array.isArray(next?.queue?.history) ? next.queue.history : [] },
@@ -100,6 +113,25 @@ window.__ModuleLoader__.load({
       }).catch((err) => setError(err.message)), []);
       React.useEffect(() => { refresh(); const timer = setInterval(refresh, 500); return () => clearInterval(timer); }, [refresh]);
       const decide = (id, decision, scope) => fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, decision, scope }) }).then(refresh);
+      const grant = (item) => {
+        setGrants((prev) => ({ ...prev, [item.id]: { loading: true, command: item.command, workspace: item.workspace } }));
+        return fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: item.id, decision: 'allow', scope: 'permanent' }) })
+          .then((r) => r.json().then((body) => ({ status: r.status, body })))
+          .then(({ status, body }) => {
+            if (status === 200 && body.ok) {
+              setGrants((prev) => ({ ...prev, [item.id]: { loading: false, command: item.command, workspace: item.workspace, rules: body.generatedRules ?? [] } }));
+            } else {
+              setGrants((prev) => ({ ...prev, [item.id]: { loading: false, command: item.command, error: body.error ?? '未知错误' } }));
+            }
+          })
+          .catch((err) => setGrants((prev) => ({ ...prev, [item.id]: { loading: false, command: item.command, error: err.message } })))
+          .then(refresh);
+      };
+      const viewRules = (rules) => {
+        setFocusRuleIds((rules ?? []).map((rule) => rule.id));
+        setRuleQuery('');
+        setTab('rules');
+      };
       const confirmRules = (workspace) => {
         setConfirming(true);
         return fetch(`${API}/rules/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace }) }).then(refresh).finally(() => setConfirming(false));
@@ -124,7 +156,19 @@ window.__ModuleLoader__.load({
           h('button', { style: tab === 'rules' ? styles.activeTab : styles.tab, onClick: () => setTab('rules') }, '规则'),
         ),
         tab === 'approvals' ? h('div', { style: styles.scrollBody },
-          state.queue.pending.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '当前没有待审批命令。')) : state.queue.pending.map((item) => h(ApprovalCard, { key: item.id, item, decide })),
+          state.queue.pending.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '当前没有待审批命令。')) : state.queue.pending.map((item) => h(ApprovalCard, { key: item.id, item, decide, grant, grantState: grants[item.id], onViewRules: viewRules })),
+          Object.keys(grants).filter((id) => Array.isArray(grants[id].rules) && grants[id].rules.length > 0).length > 0 && h('div', { style: styles.section },
+            h('div', { style: styles.sectionHeading }, h('div', null, h('div', { style: styles.sectionTitle }, '刚刚生成并锁定的规则'), h('div', { style: styles.sectionSubtitle }, '这些规则已保存并确认，立即生效'))),
+            h('div', { style: styles.historyList }, Object.keys(grants).filter((id) => Array.isArray(grants[id].rules) && grants[id].rules.length > 0).map((id) => {
+              const entry = grants[id];
+              return h('div', { key: `grant-${id}`, style: styles.grantResult },
+                entry.command && h('code', { style: styles.historyCommand }, entry.command),
+                h('div', { style: styles.grantTitle }, `已生成并锁定 ${entry.rules.length} 条放行规则`),
+                entry.rules.map((rule, i) => h(RuleRow, { key: rule.id ?? i, rule, index: i, compact: true })),
+                h('div', { style: styles.actions }, h(Button, { primary: true, onClick: () => viewRules(entry.rules) }, '在规则页查看')),
+              );
+            }),
+          )),
           state.queue.history.length > 0 && h('div', { style: styles.section },
             h('div', { style: styles.sectionHeading },
               h('div', null, h('div', { style: styles.sectionTitle }, '历史'), h('div', { style: styles.sectionSubtitle }, '最近 100 条审批记录')),
@@ -151,7 +195,7 @@ window.__ModuleLoader__.load({
               sub: `${rules.length}/${store.rules.length} 条 · ${store.confirmed ? '已确认' : '待确认'}${store.workspace ? ` · ${store.workspace}` : ''}`,
               actions: !store.confirmed && h(Button, { primary: true, disabled: confirming, onClick: () => confirmRules(store.workspace) }, confirming ? '确认中…' : '确认规则'),
             },
-              rules.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '没有匹配的规则。')) : h('div', { style: styles.rulesList }, rules.map((rule, index) => h(RuleRow, { key: rule.id ?? index, rule, index }))),
+              rules.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '没有匹配的规则。')) : h('div', { style: styles.rulesList }, rules.map((rule, index) => h(RuleRow, { key: rule.id ?? index, rule, index, highlight: focusRuleIds.includes(rule.id) }))),
               (store.added.length > 0 || store.removed.length > 0 || store.modified.length > 0) && h('div', { style: styles.changeBox },
                 h('div', { style: styles.sectionLabel }, '待确认变更'),
                 store.added.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `新增 ${store.added.length} 条`), store.added.map((rule, i) => h(RuleRow, { key: `added-${rule.id ?? i}`, rule, index: i }))),
@@ -199,6 +243,8 @@ window.__ModuleLoader__.load({
       preview: { background: 'var(--dsw-alias-bg-layer-2)', padding: 12, overflow: 'auto', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)', fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12 },
       rulesList: { display: 'grid', gap: 8 },
       ruleRow: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, padding: 10, background: 'var(--dsw-alias-bg-layer-2)', display: 'flex', gap: 10, alignItems: 'flex-start' },
+      ruleRowHighlight: { borderColor: 'var(--dsw-alias-brand-primary)', boxShadow: '0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 30%, transparent)' },
+      newTag: { color: 'var(--dsw-alias-brand-primary)', border: '1px solid var(--dsw-alias-brand-primary)', borderRadius: 999, padding: '0 6px', fontSize: 10, fontWeight: 700 },
       ruleIndex: { width: 26, height: 26, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, fontWeight: 700, flexShrink: 0 },
       ruleBody: { flex: 1, minWidth: 0 },
       ruleHeader: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 },
@@ -210,6 +256,9 @@ window.__ModuleLoader__.load({
       emptyPanel: { padding: '24px 0', textAlign: 'center' },
       changeBox: { marginTop: 14, padding: 12, border: '1px dashed var(--dsw-alias-border-l2)', borderRadius: 6, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 6%, transparent)' },
       changeTitle: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, fontWeight: 600, margin: '8px 0 6px' },
+      grantResult: { marginTop: 12, padding: 12, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 45%, transparent)', borderRadius: 6, background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent)' },
+      grantTitle: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 12, fontWeight: 700, marginBottom: 8 },
+      grantError: { marginTop: 12, padding: 12, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent)', borderRadius: 6, background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)', fontSize: 13 },
       errorBox: { padding: 24, margin: 24, border: '1px solid var(--dsw-alias-state-error-primary)', borderRadius: 10, background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)' },
       errorPre: { whiteSpace: 'pre-wrap', overflowWrap: 'break-word', fontSize: 12, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
       banner: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', margin: '0 24px 12px', padding: '10px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent)', background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, transparent)' },

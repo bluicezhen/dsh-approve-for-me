@@ -41,11 +41,11 @@ class ApprovalQueue {
     return { id, result };
   }
 
-  decide(id, decision, scope = 'once') {
+  decide(id, decision, scope = 'once', metadata = {}) {
     const entry = this.pending.get(id);
     if (!entry || !['allow', 'deny'].includes(decision)) return false;
     this.pending.delete(id);
-    const record = { ...entry, resolve: undefined, decision, scope, decidedAt: new Date().toISOString() };
+    const record = { ...entry, resolve: undefined, decision, scope, ...metadata, decidedAt: new Date().toISOString() };
     this.history.unshift(record);
     this.history = this.history.slice(0, 100);
     entry.resolve({ decision, scope });
@@ -129,14 +129,23 @@ export async function apply(ctx, config = {}) {
     if (timer) clearTimeout(timer);
     if (outcome.scope === 'cancelled' || outcome.scope === 'timeout') queue.decide(queued.id, 'deny', outcome.scope);
     if (outcome.decision === 'allow' && outcome.scope === 'session') sessionGrants.set(key, true);
-    if (outcome.decision === 'allow' && outcome.scope === 'permanent') {
-      const store = await storeFor(workspace);
-      const segments = pending.decision.segments?.filter((s) => s.verdict !== 'auto-allow') ?? [];
-      const rules = [...store.state.rules];
-      for (const segment of segments) rules.push({ id: `human-${Date.now()}`, effect: 'allow', program: segment.argv?.[0], args: (segment.argv ?? []).slice(1).map((value) => ({ kind: 'literal', value })), scope: 'human' });
-      await store.save(rules);
-    }
     return outcome;
+  };
+
+  const createPermanentGrant = async (entry) => {
+    const store = await storeFor(entry.workspace);
+    const segments = entry.decision?.segments?.filter((s) => s.verdict !== 'auto-allow') ?? [];
+    const generatedRules = segments.map((segment, index) => ({
+      id: `human-${Date.now()}-${index + 1}`,
+      effect: 'allow',
+      program: segment.argv?.[0],
+      args: (segment.argv ?? []).slice(1).map((value) => ({ kind: 'literal', value })),
+      scope: 'human',
+    }));
+    if (!generatedRules.length) throw new Error('没有可生成的待审批命令段');
+    await store.save([...store.state.rules, ...generatedRules]);
+    const confirmedState = await store.confirm();
+    return { generatedRules, confirmedState };
   };
 
   ctx.effect(() => ctx.on('tools/pre-execute', async (exec, next) => {
@@ -175,8 +184,19 @@ export async function apply(ctx, config = {}) {
         }
         if (req.method === 'POST' && suffix === '/decision') {
           const body = await readBody(req);
+          const entry = queue.pending.get(body.id);
+          if (!entry) return sendJson(res, 404, { ok: false, error: 'approval-not-found' });
+          if (body.decision === 'allow' && body.scope === 'permanent') {
+            try {
+              const grant = await createPermanentGrant(entry);
+              const ok = queue.decide(body.id, 'allow', 'permanent', { generatedRules: grant.generatedRules, rulesConfirmed: true });
+              return sendJson(res, ok ? 200 : 409, { ok, generatedRules: grant.generatedRules, rulesConfirmed: true, workspace: entry.workspace });
+            } catch (error) {
+              return sendJson(res, 500, { ok: false, error: `规则生成或确认失败：${error.message}` });
+            }
+          }
           const ok = queue.decide(body.id, body.decision, body.scope);
-          return sendJson(res, ok ? 200 : 404, { ok });
+          return sendJson(res, ok ? 200 : 400, { ok });
         }
         if (req.method === 'POST' && suffix === '/dry-run') {
           const body = await readBody(req);
