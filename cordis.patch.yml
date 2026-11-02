@@ -1,0 +1,4 @@
+- insert:
+    - id: approve-for-me-gate
+      name: dsh-approve-for-me
+      config: {}

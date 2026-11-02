@@ -1,0 +1,21 @@
+{
+  "name": "dsh-approve-for-me",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./index.js", "./client": "./client.js", "./icon": "./icon.svg" },
+  "files": ["index.js", "client.js", "lib", "locale", "cordis.patch.yml", "icon.svg"],
+  "scripts": {
+    "test": "node --test",
+    "sync": "node scripts/sync.mjs",
+    "kick": "node scripts/kick.mjs"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "immediately": true, "inject": ["slots", "layout", "locale"] }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*"
+  }
+}
