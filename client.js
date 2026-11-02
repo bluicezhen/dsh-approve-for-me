@@ -24,6 +24,25 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function RuleRow({ rule }) {
+      return h('div', { style: styles.ruleRow },
+        h('div', { style: styles.ruleHeader },
+          h('strong', null, rule.id ?? '未命名规则'),
+          h('span', { style: rule.effect === 'deny' ? styles.denyTag : styles.allowTag }, rule.effect === 'deny' ? '拒绝' : '放行'),
+        ),
+        h('div', { style: styles.ruleDetails },
+          h('span', null, `程序：${rule.program ?? '*'}`),
+          h('span', null, `参数：${formatArgs(rule.args)}`),
+          h('span', null, `作用域：${rule.scope ?? '默认'}`),
+        ),
+      );
+    }
+
+    function formatArgs(args) {
+      if (!Array.isArray(args) || args.length === 0) return '任意';
+      return args.map((arg) => typeof arg === 'string' ? arg : `${arg.kind ?? '匹配'}${arg.value ? `=${arg.value}` : ''}`).join(' ');
+    }
+
     function Page() {
       const [tab, setTab] = React.useState('approvals');
       const [state, setState] = React.useState({ queue: { pending: [], history: [] }, stores: [] });
@@ -32,6 +51,7 @@ window.__ModuleLoader__.load({
       const refresh = React.useCallback(() => fetch(`${API}/state`).then((r) => r.json()).then(setState).catch(() => {}), []);
       React.useEffect(() => { refresh(); const timer = setInterval(refresh, 500); return () => clearInterval(timer); }, [refresh]);
       const decide = (id, decision, scope) => fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, decision, scope }) }).then(refresh);
+      const confirmRules = (workspace) => fetch(`${API}/rules/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace }) }).then(refresh);
       const dryRun = () => fetch(`${API}/dry-run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command }) }).then((r) => r.json()).then(setPreview).catch(() => setPreview({ error: '试算失败' }));
       return h('div', { style: styles.page },
         h('header', { style: styles.header }, h('h1', null, '命令审批'), h('span', { style: styles.badge }, String(state.queue.pending.length))),
@@ -48,7 +68,16 @@ window.__ModuleLoader__.load({
           h(Button, { onClick: dryRun, disabled: !command }, '试算'),
           preview && h('pre', { style: styles.preview }, JSON.stringify(preview, null, 2)),
           h('h2', null, '规则库'),
-          state.stores.map((store) => h('div', { key: store.rulesDigest, style: styles.card }, `规则 ${store.rules.length} 条 · ${store.confirmed ? '已确认' : '待确认'}`)),
+          state.stores.length === 0 ? h('p', null, '尚未加载规则库。') : state.stores.map((store) => h('div', { key: `${store.workspace ?? 'global'}-${store.rulesDigest}`, style: styles.card },
+            h('div', { style: styles.storeHeader },
+              h('div', null,
+                h('strong', null, store.workspace ? `工作区：${store.workspace}` : '全局规则'),
+                h('div', { style: styles.storeStatus }, `规则 ${store.rules.length} 条 · ${store.confirmed ? '已确认' : '待确认'}`),
+              ),
+              !store.confirmed && h(Button, { onClick: () => confirmRules(store.workspace) }, '确认规则'),
+            ),
+            h('div', { style: styles.rulesList }, store.rules.map((rule, index) => h(RuleRow, { key: rule.id ?? index, rule }))),
+          )),
         ),
       );
     }
@@ -67,10 +96,31 @@ window.__ModuleLoader__.load({
       history: { padding: '8px 0', borderBottom: '1px solid var(--dsw-alias-border-l)' },
       textarea: { width: '100%', minHeight: 100, padding: 12, boxSizing: 'border-box', marginBottom: 8 },
       preview: { background: 'var(--dsw-alias-bg-overlay)', padding: 12, overflow: 'auto' },
+      storeHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 12 },
+      storeStatus: { color: 'var(--dsw-alias-text-secondary)', marginTop: 4 },
+      rulesList: { display: 'grid', gap: 8 },
+      ruleRow: { border: '1px solid var(--dsw-alias-border-l)', borderRadius: 6, padding: 12, background: 'var(--dsw-alias-bg-base)' },
+      ruleHeader: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 },
+      ruleDetails: { display: 'flex', flexWrap: 'wrap', gap: 12, color: 'var(--dsw-alias-text-secondary)', fontSize: 13 },
+      allowTag: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 12 },
+      denyTag: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12 },
+      iconWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
+      iconBadge: { position: 'absolute', top: -8, right: -12, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 999, background: 'var(--dsw-alias-state-error-primary)', color: '#fff', fontSize: 10, lineHeight: '16px', textAlign: 'center', fontWeight: 700 },
     };
 
     function Icon({ size }) {
-      return h('span', { 'aria-hidden': true, style: { fontSize: size ? `${size}px` : '18px' } }, '🛡');
+      const [count, setCount] = React.useState(0);
+      React.useEffect(() => {
+        let active = true;
+        const refresh = () => fetch(`${API}/state`).then((r) => r.json()).then((next) => active && setCount(next.queue?.pending?.length ?? 0)).catch(() => {});
+        refresh();
+        const timer = setInterval(refresh, 500);
+        return () => { active = false; clearInterval(timer); };
+      }, []);
+      return h('span', { style: styles.iconWrap, 'aria-label': count ? `有 ${count} 条待审批命令` : '没有待审批命令' },
+        h('span', { 'aria-hidden': true, style: { fontSize: size ? `${size}px` : '18px' } }, '🛡'),
+        count > 0 && h('span', { style: styles.iconBadge }, count > 99 ? '99+' : String(count)),
+      );
     }
     return {
       inject: ['slots', 'layout'],
