@@ -82,11 +82,22 @@ window.__ModuleLoader__.load({
     function Page() {
       const [tab, setTab] = React.useState('approvals');
       const [state, setState] = React.useState({ queue: { pending: [], history: [] }, stores: [] });
+      const [error, setError] = React.useState(null);
+      React.useEffect(() => {
+        window.addEventListener('error', (event) => { setError(event.error?.message ?? String(event.error)); });
+        window.addEventListener('unhandledrejection', (event) => { setError(event.reason?.message ?? String(event.reason)); });
+      }, []);
       const [command, setCommand] = React.useState('');
       const [preview, setPreview] = React.useState(null);
       const [ruleQuery, setRuleQuery] = React.useState('');
       const [confirming, setConfirming] = React.useState(false);
-      const refresh = React.useCallback(() => fetch(`${API}/state`).then((r) => r.json()).then(setState).catch(() => {}), []);
+      const refresh = React.useCallback(() => fetch(`${API}/state`).then((r) => r.json()).then((next) => {
+        const safe = {
+          queue: { pending: Array.isArray(next?.queue?.pending) ? next.queue.pending : [], history: Array.isArray(next?.queue?.history) ? next.queue.history : [] },
+          stores: Array.isArray(next?.stores) ? next.stores.map((store) => ({ ...store, rules: Array.isArray(store?.rules) ? store.rules : [], added: Array.isArray(store?.added) ? store.added : [], removed: Array.isArray(store?.removed) ? store.removed : [], modified: Array.isArray(store?.modified) ? store.modified : [] })) : [],
+        };
+        setState(safe);
+      }).catch((err) => setError(err.message)), []);
       React.useEffect(() => { refresh(); const timer = setInterval(refresh, 500); return () => clearInterval(timer); }, [refresh]);
       const decide = (id, decision, scope) => fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, decision, scope }) }).then(refresh);
       const confirmRules = (workspace) => {
@@ -94,6 +105,7 @@ window.__ModuleLoader__.load({
         return fetch(`${API}/rules/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace }) }).then(refresh).finally(() => setConfirming(false));
       };
       const dryRun = () => fetch(`${API}/dry-run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command }) }).then((r) => r.json()).then(setPreview).catch(() => setPreview({ error: '试算失败' }));
+      if (error) return h('div', { style: styles.page }, h('div', { style: styles.errorBox }, h('h2', null, '界面渲染错误'), h('pre', { style: styles.errorPre }, error), h(Button, { onClick: () => { setError(null); refresh(); } }, '重试')));
       return h('div', { style: styles.page },
         h('header', { style: styles.header },
           h('h1', { style: styles.title }, '命令审批'),
@@ -190,6 +202,8 @@ window.__ModuleLoader__.load({
       emptyPanel: { padding: '24px 0', textAlign: 'center' },
       changeBox: { marginTop: 14, padding: 12, border: '1px dashed var(--dsw-alias-border-l2)', borderRadius: 6, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 6%, transparent)' },
       changeTitle: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, fontWeight: 600, margin: '8px 0 6px' },
+      errorBox: { padding: 24, margin: 24, border: '1px solid var(--dsw-alias-state-error-primary)', borderRadius: 10, background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)' },
+      errorPre: { whiteSpace: 'pre-wrap', overflowWrap: 'break-word', fontSize: 12, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
       iconWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
       iconBadge: { position: 'absolute', top: -8, right: -12, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 999, background: 'var(--dsw-alias-state-error-primary)', color: '#fff', fontSize: 10, lineHeight: '16px', textAlign: 'center', fontWeight: 700 },
     };
