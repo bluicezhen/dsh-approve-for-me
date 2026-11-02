@@ -106,10 +106,18 @@ window.__ModuleLoader__.load({
       };
       const dryRun = () => fetch(`${API}/dry-run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command }) }).then((r) => r.json()).then(setPreview).catch(() => setPreview({ error: '试算失败' }));
       if (error) return h('div', { style: styles.page }, h('div', { style: styles.errorBox }, h('h2', null, '界面渲染错误'), h('pre', { style: styles.errorPre }, error), h(Button, { onClick: () => { setError(null); refresh(); } }, '重试')));
+      const unconfirmedStores = state.stores.filter((store) => !store.confirmed);
       return h('div', { style: styles.page },
         h('header', { style: styles.header },
           h('h1', { style: styles.title }, '命令审批'),
           state.queue.pending.length > 0 && h(Badge, { kind: 'error' }, String(state.queue.pending.length)),
+        ),
+        unconfirmedStores.length > 0 && h('div', { style: styles.banner },
+          h('div', { style: styles.bannerText },
+            h('strong', null, '有规则尚未确认，自动放行已暂停。'),
+            h('span', null, '确认规则后，只有命中放行规则的命令才会自动执行；其余命令仍需人工审批。'),
+          ),
+          h(Button, { primary: true, disabled: confirming, onClick: () => setTab('rules') }, '去确认规则'),
         ),
         h('nav', { style: styles.tabs },
           h('button', { style: tab === 'approvals' ? styles.activeTab : styles.tab, onClick: () => setTab('approvals') }, '审批'),
@@ -204,22 +212,33 @@ window.__ModuleLoader__.load({
       changeTitle: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, fontWeight: 600, margin: '8px 0 6px' },
       errorBox: { padding: 24, margin: 24, border: '1px solid var(--dsw-alias-state-error-primary)', borderRadius: 10, background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)' },
       errorPre: { whiteSpace: 'pre-wrap', overflowWrap: 'break-word', fontSize: 12, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
+      banner: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', margin: '0 24px 12px', padding: '10px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent)', background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, transparent)' },
+      bannerText: { display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, color: 'var(--dsw-alias-label-primary)' },
       iconWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
       iconBadge: { position: 'absolute', top: -8, right: -12, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 999, background: 'var(--dsw-alias-state-error-primary)', color: '#fff', fontSize: 10, lineHeight: '16px', textAlign: 'center', fontWeight: 700 },
+      iconDot: { position: 'absolute', top: -8, right: -10, minWidth: 15, height: 15, padding: '0 3px', borderRadius: 999, background: 'var(--dsw-alias-state-warn-primary)', color: '#fff', fontSize: 10, lineHeight: '15px', textAlign: 'center', fontWeight: 700 },
     };
 
     function Icon({ size }) {
       const [count, setCount] = React.useState(0);
+      const [needsAttention, setNeedsAttention] = React.useState(false);
       React.useEffect(() => {
         let active = true;
-        const refresh = () => fetch(`${API}/state`).then((r) => r.json()).then((next) => active && setCount(next.queue?.pending?.length ?? 0)).catch(() => {});
+        const refresh = () => fetch(`${API}/state`).then((r) => r.json()).then((next) => {
+          if (!active) return;
+          setCount(next.queue?.pending?.length ?? 0);
+          setNeedsAttention(Array.isArray(next?.stores) && next.stores.some((store) => store && store.confirmed === false));
+        }).catch(() => {});
         refresh();
         const timer = setInterval(refresh, 500);
         return () => { active = false; clearInterval(timer); };
       }, []);
-      return h('span', { style: styles.iconWrap, 'aria-label': count ? `有 ${count} 条待审批命令` : '没有待审批命令' },
+      const label = count ? `有 ${count} 条待审批命令` : needsAttention ? '有规则待确认' : '没有待审批命令';
+      return h('span', { style: styles.iconWrap, 'aria-label': label },
         h('span', { 'aria-hidden': true, style: { fontSize: size ? `${size}px` : '18px' } }, '🛡'),
-        count > 0 && h('span', { style: styles.iconBadge }, count > 99 ? '99+' : String(count)),
+        count > 0
+          ? h('span', { style: styles.iconBadge }, count > 99 ? '99+' : String(count))
+          : needsAttention ? h('span', { style: styles.iconDot }, '!') : null,
       );
     }
     return {

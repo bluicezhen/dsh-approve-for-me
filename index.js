@@ -94,9 +94,10 @@ export async function apply(ctx, config = {}) {
     if (!combined.confirmed) {
       return {
         verdict: 'ask',
-        reason: '规则文件已被修改，等待人复查并确认后才能自动放行',
+        reason: '规则文件已变更，尚未经人确认，因此该命令需人工审批。请在「命令审批」插件的「规则」标签页中确认规则，或在「审批」标签页直接放行本次命令。',
+        pendingReason: '规则未确认，请在插件「规则」页确认规则后再放行',
         workspace,
-        decision: { verdict: 'pending', reason: '规则待确认', command, segments: [] },
+        decision: { verdict: 'pending', reason: '规则未确认，等待人工确认规则或放行本次命令', command, segments: [{ text: command, verdict: 'pending', argv: command.trim().split(/\s+/) }] },
       };
     }
     const decision = evaluateCommand(command, { workspace, rules: combined.rules });
@@ -145,7 +146,13 @@ export async function apply(ctx, config = {}) {
       if (pending.verdict === 'deny') return { kind: 'deny', reason: pending.reason };
       const outcome = await approve(exec, pending, exec.signal);
       if (outcome.decision === 'allow') return next();
-      return { kind: 'deny', reason: pending.reason ?? '人工审批未通过' };
+      const why = outcome.scope === 'timeout'
+        ? '等待人工审批超时'
+        : outcome.scope === 'cancelled'
+          ? '命令被取消'
+          : '人工审批未通过';
+      const hint = pending.pendingReason ? `（${pending.pendingReason}）` : '';
+      return { kind: 'deny', reason: `${why}：该命令未获放行${hint}。请向用户说明要执行的命令与原因，等待用户在「命令审批」插件中放行后再重试；不要自行重试或绕过。` };
     } catch (error) {
       return { kind: 'deny', reason: `命令审批系统错误：${error.message}` };
     }
@@ -177,7 +184,7 @@ export async function apply(ctx, config = {}) {
           const body = await readBody(req);
           const workspace = body.workspace ?? process.cwd();
           const combined = await rulesFor(workspace);
-          return sendJson(res, 200, combined.confirmed ? evaluateCommand(body.command, { workspace, rules: combined.rules }) : { verdict: 'pending', reason: '规则文件待人确认' });
+          return sendJson(res, 200, combined.confirmed ? evaluateCommand(body.command, { workspace, rules: combined.rules }) : { verdict: 'pending', reason: '规则尚未确认，请先在「规则」页确认规则后再试算（未确认时所有命令都会被拦截等待人工处理）' });
         }
         if (req.method === 'POST' && suffix === '/rules/confirm') {
           const body = await readBody(req);
