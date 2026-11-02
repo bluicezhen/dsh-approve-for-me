@@ -169,9 +169,7 @@ export async function apply(ctx, config = {}) {
           const pending = [...queue.pending.values()];
           const snapshots = [...stores.values()].map((store) => {
             const snap = store.snapshot();
-            const previous = store.previousConfirmedDigest ?? store.state.confirmedDigest;
-            const changed = previous && previous !== digestRules(store.state.rules);
-            return { ...snap, workspace: store.workspace, path: store.path, previousConfirmedDigest: previous, changed };
+            return { ...snap, workspace: store.workspace, path: store.path };
           });
           return sendJson(res, 200, { queue: queue.snapshot(), stores: snapshots });
         }
