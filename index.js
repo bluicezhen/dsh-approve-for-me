@@ -80,6 +80,7 @@ export async function apply(ctx, config = {}) {
       local,
       rules: [...global.state.rules, ...(local ? local.state.rules : [])],
       confirmed: global.snapshot().confirmed && (!local || local.snapshot().confirmed),
+      confirmedDigests: { global: global.state.confirmedDigest, local: local?.state?.confirmedDigest },
     };
   };
 
@@ -156,7 +157,17 @@ export async function apply(ctx, config = {}) {
       try {
         const url = new URL(String(req.url), 'http://localhost');
         const suffix = url.pathname.slice(API_PREFIX.length);
-        if (req.method === 'GET' && suffix === '/state') return sendJson(res, 200, { queue: queue.snapshot(), stores: [...stores.values()].map((store) => store.snapshot()) });
+        if (req.method === 'GET' && suffix === '/state') {
+          const workspaces = [...stores.values()].map((store) => store.workspace);
+          const pending = [...queue.pending.values()];
+          const snapshots = [...stores.values()].map((store) => {
+            const snap = store.snapshot();
+            const previous = store.previousConfirmedDigest ?? store.state.confirmedDigest;
+            const changed = previous && previous !== digestRules(store.state.rules);
+            return { ...snap, workspace: store.workspace, path: store.path, previousConfirmedDigest: previous, changed };
+          });
+          return sendJson(res, 200, { queue: queue.snapshot(), stores: snapshots });
+        }
         if (req.method === 'POST' && suffix === '/decision') {
           const body = await readBody(req);
           const ok = queue.decide(body.id, body.decision, body.scope);

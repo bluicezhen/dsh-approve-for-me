@@ -85,10 +85,14 @@ window.__ModuleLoader__.load({
       const [command, setCommand] = React.useState('');
       const [preview, setPreview] = React.useState(null);
       const [ruleQuery, setRuleQuery] = React.useState('');
+      const [confirming, setConfirming] = React.useState(false);
       const refresh = React.useCallback(() => fetch(`${API}/state`).then((r) => r.json()).then(setState).catch(() => {}), []);
       React.useEffect(() => { refresh(); const timer = setInterval(refresh, 500); return () => clearInterval(timer); }, [refresh]);
       const decide = (id, decision, scope) => fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, decision, scope }) }).then(refresh);
-      const confirmRules = (workspace) => fetch(`${API}/rules/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace }) }).then(refresh);
+      const confirmRules = (workspace) => {
+        setConfirming(true);
+        return fetch(`${API}/rules/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace }) }).then(refresh).finally(() => setConfirming(false));
+      };
       const dryRun = () => fetch(`${API}/dry-run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command }) }).then((r) => r.json()).then(setPreview).catch(() => setPreview({ error: '试算失败' }));
       return h('div', { style: styles.page },
         h('header', { style: styles.header },
@@ -125,9 +129,15 @@ window.__ModuleLoader__.load({
               key: `${store.workspace ?? 'global'}-${store.rulesDigest}`,
               title: store.workspace ? `工作区规则` : '全局规则',
               sub: `${rules.length}/${store.rules.length} 条 · ${store.confirmed ? '已确认' : '待确认'}${store.workspace ? ` · ${store.workspace}` : ''}`,
-              actions: !store.confirmed && h(Button, { primary: true, onClick: () => confirmRules(store.workspace) }, '确认规则'),
+              actions: !store.confirmed && h(Button, { primary: true, disabled: confirming, onClick: () => confirmRules(store.workspace) }, confirming ? '确认中…' : '确认规则'),
             },
               rules.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '没有匹配的规则。')) : h('div', { style: styles.rulesList }, rules.map((rule, index) => h(RuleRow, { key: rule.id ?? index, rule, index }))),
+              (store.added.length > 0 || store.removed.length > 0 || store.modified.length > 0) && h('div', { style: styles.changeBox },
+                h('div', { style: styles.sectionLabel }, '待确认变更'),
+                store.added.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `新增 ${store.added.length} 条`), store.added.map((rule, i) => h(RuleRow, { key: `added-${rule.id ?? i}`, rule, index: i }))),
+                store.removed.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `删除 ${store.removed.length} 条`), store.removed.map((rule, i) => h(RuleRow, { key: `removed-${rule.id ?? i}`, rule, index: i }))),
+                store.modified.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `修改 ${store.modified.length} 条`), store.modified.map((rule, i) => h(RuleRow, { key: `modified-${rule.id ?? i}`, rule, index: i }))),
+              ),
             );
           }),
         ),
@@ -178,6 +188,8 @@ window.__ModuleLoader__.load({
       denyTag: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, fontWeight: 600 },
       muted: { color: 'var(--dsw-alias-label-secondary)', fontSize: 13 },
       emptyPanel: { padding: '24px 0', textAlign: 'center' },
+      changeBox: { marginTop: 14, padding: 12, border: '1px dashed var(--dsw-alias-border-l2)', borderRadius: 6, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 6%, transparent)' },
+      changeTitle: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, fontWeight: 600, margin: '8px 0 6px' },
       iconWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
       iconBadge: { position: 'absolute', top: -8, right: -12, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 999, background: 'var(--dsw-alias-state-error-primary)', color: '#fff', fontSize: 10, lineHeight: '16px', textAlign: 'center', fontWeight: 700 },
     };
