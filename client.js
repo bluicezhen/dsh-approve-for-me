@@ -356,8 +356,16 @@ window.__ModuleLoader__.load({
         return () => { active = false; clearInterval(timer); };
       }, []);
       const label = count ? `有 ${count} 条待审批命令` : needsAttention ? '有规则待确认' : '没有待审批命令';
+      const px = size ?? 18;
       return h('span', { style: styles.iconWrap, 'aria-label': label },
-        h('span', { 'aria-hidden': true, style: { fontSize: size ? `${size}px` : '18px' } }, '🛡'),
+        h('svg', {
+          width: px, height: px, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+          strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round',
+          'aria-hidden': true, style: { display: 'block', flexShrink: 0 },
+        },
+          h('path', { d: 'M12 3 5 6v5.5c0 4.4 2.8 7.6 7 9.5 4.2-1.9 7-5.1 7-9.5V6l-7-3Z' }),
+          h('path', { d: 'M9.2 12.1l1.9 1.9 3.7-3.9' }),
+        ),
         count > 0
           ? h('span', { style: styles.iconBadge }, count > 99 ? '99+' : String(count))
           : needsAttention ? h('span', { style: styles.iconDot }, '!') : null,
