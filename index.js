@@ -198,12 +198,6 @@ export async function apply(ctx, config = {}) {
           const ok = queue.decide(body.id, body.decision, body.scope);
           return sendJson(res, ok ? 200 : 400, { ok });
         }
-        if (req.method === 'POST' && suffix === '/dry-run') {
-          const body = await readBody(req);
-          const workspace = body.workspace ?? process.cwd();
-          const combined = await rulesFor(workspace);
-          return sendJson(res, 200, combined.confirmed ? evaluateCommand(body.command, { workspace, rules: combined.rules }) : { verdict: 'pending', reason: '规则尚未确认，请先在「规则」页确认规则后再试算（未确认时所有命令都会被拦截等待人工处理）' });
-        }
         if (req.method === 'POST' && suffix === '/rules/confirm') {
           const body = await readBody(req);
           const store = await storeFor(body.workspace);

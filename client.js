@@ -98,8 +98,6 @@ window.__ModuleLoader__.load({
         window.addEventListener('error', (event) => { setError(event.error?.message ?? String(event.error)); });
         window.addEventListener('unhandledrejection', (event) => { setError(event.reason?.message ?? String(event.reason)); });
       }, []);
-      const [command, setCommand] = React.useState('');
-      const [preview, setPreview] = React.useState(null);
       const [ruleQuery, setRuleQuery] = React.useState('');
       const [confirming, setConfirming] = React.useState(false);
       const [grants, setGrants] = React.useState({});
@@ -136,7 +134,6 @@ window.__ModuleLoader__.load({
         setConfirming(true);
         return fetch(`${API}/rules/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace }) }).then(refresh).finally(() => setConfirming(false));
       };
-      const dryRun = () => fetch(`${API}/dry-run`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ command }) }).then((r) => r.json()).then(setPreview).catch(() => setPreview({ error: '试算失败' }));
       if (error) return h('div', { style: styles.page }, h('div', { style: styles.errorBox }, h('h2', null, '界面渲染错误'), h('pre', { style: styles.errorPre }, error), h(Button, { onClick: () => { setError(null); refresh(); } }, '重试')));
       const unconfirmedStores = state.stores.filter((store) => !store.confirmed);
       return h('div', { style: styles.page },
@@ -177,11 +174,6 @@ window.__ModuleLoader__.load({
             h('div', { style: styles.historyList }, state.queue.history.map((item) => h(HistoryCard, { key: item.id, item }))),
           ),
         ) : h('div', { style: styles.scrollBody },
-          h(Card, { title: '命令试算器', sub: '粘贴一条命令，查看每段命令的判定结果' },
-            h('textarea', { value: command, onChange: (event) => setCommand(event.target.value), placeholder: '例如：echo hello && rm -rf /tmp/example', style: styles.textarea }),
-            h('div', { style: styles.actions }, h(Button, { primary: true, onClick: dryRun, disabled: !command }, '试算')),
-            preview && h('pre', { style: styles.preview }, JSON.stringify(preview, null, 2)),
-          ),
           h('div', { style: styles.sectionHeading },
             h('div', null, h('div', { style: styles.sectionTitle }, '规则库'), h('div', { style: styles.sectionSubtitle }, '只读展示当前生效的全局与工作区规则')),
             h('input', { value: ruleQuery, onChange: (event) => setRuleQuery(event.target.value), placeholder: '搜索规则 ID、程序或参数', style: styles.searchInput }),
@@ -238,9 +230,7 @@ window.__ModuleLoader__.load({
       historyList: { display: 'grid', gap: 8 },
       historyRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6 },
       historyCommand: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12 },
-      textarea: { width: '100%', minHeight: 100, padding: 12, boxSizing: 'border-box', marginBottom: 12, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 13, color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-layer-2)' },
       searchInput: { minWidth: 220, maxWidth: 320, flex: 1, padding: '6px 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 999, fontFamily: 'inherit', fontSize: 13, color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-layer-1)' },
-      preview: { background: 'var(--dsw-alias-bg-layer-2)', padding: 12, overflow: 'auto', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2)', fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12 },
       rulesList: { display: 'grid', gap: 8 },
       ruleRow: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, padding: 10, background: 'var(--dsw-alias-bg-layer-2)', display: 'flex', gap: 10, alignItems: 'flex-start' },
       ruleRowHighlight: { borderColor: 'var(--dsw-alias-brand-primary)', boxShadow: '0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 30%, transparent)' },
