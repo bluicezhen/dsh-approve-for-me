@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
         h('div', { style: styles.reason }, item.reason),
         state.error && h('div', { style: styles.grantError }, h('strong', null, '规则生成失败：'), h('span', null, state.error), h('div', { style: styles.actions }, h(Button, { onClick: act(() => previewGrant(item)) }, '重试'))),
         generated && generated.length > 0 && h('div', { style: styles.grantResult },
-          h('div', { style: styles.grantTitle }, `已生成并锁定 ${generated.length} 条放行规则`),
+          h('div', { style: styles.grantTitle }, `已生成并锁定 ${generated.length} 条放行规则${state.target === 'global' ? '（全局）' : '（当前工作区）'}`),
           generated.map((rule, i) => h(RuleRow, { key: rule.id ?? i, rule, index: i, compact: true })),
           h('div', { style: styles.actions }, h(Button, { primary: true, onClick: act(() => onViewRules(generated)) }, '在规则列表查看')),
         ),
@@ -108,7 +108,7 @@ window.__ModuleLoader__.load({
       return args.map((arg) => typeof arg === 'string' ? arg : `${arg.kind ?? '匹配'}${arg.value ? `=${arg.value}` : ''}`).join(' ');
     }
 
-    function GrantPreviewDialog({ preview, onChangeRule, onAddRule, onRemoveRule, onCancel, onConfirm }) {
+    function GrantPreviewDialog({ preview, onChangeTarget, onChangeRule, onAddRule, onRemoveRule, onCancel, onConfirm }) {
       const saving = preview.saving;
       return h('div', { style: styles.overlay, onClick: onCancel },
         h('div', { style: styles.dialog, onClick: (event) => event.stopPropagation() },
@@ -120,6 +120,14 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', style: styles.dialogClose, onClick: onCancel, 'aria-label': '关闭' }, '×'),
           ),
           h('div', { style: styles.dialogBody },
+            h('div', { style: styles.targetRow },
+              h('span', { style: styles.editorLabel }, '写入位置'),
+              h('select', { value: preview.target, onChange: (event) => onChangeTarget(event.target.value), style: styles.select },
+                h('option', { value: 'workspace' }, '当前工作区'),
+                h('option', { value: 'global' }, '全局'),
+              ),
+              h('span', { style: styles.targetHint }, preview.target === 'global' ? '全局规则对所有工作区生效' : `仅作用于 ${preview.workspace ?? '当前工作区'}`),
+            ),
             preview.loading && h('div', { style: styles.dialogEmpty }, '正在生成规则预览…'),
             preview.error && h('div', { style: styles.dialogError }, preview.error),
             !preview.loading && preview.rules.length === 0 && h('div', { style: styles.dialogEmpty }, '至少保留一条规则才能写入。'),
@@ -181,7 +189,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { refresh(); const timer = setInterval(refresh, 500); return () => clearInterval(timer); }, [refresh]);
       const decide = (id, decision, scope) => fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, decision, scope }) }).then(refresh);
       const previewGrant = (item) => {
-        setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, rules: [], error: null, saving: false, loading: true });
+        setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'workspace', rules: [], error: null, saving: false, loading: true });
         return fetch(`${API}/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: item.id }) })
           .then((r) => r.json().then((body) => ({ status: r.status, body })))
           .then(({ status, body }) => {
@@ -190,6 +198,7 @@ window.__ModuleLoader__.load({
                 itemId: item.id,
                 itemCommand: item.command,
                 workspace: body.workspace ?? item.workspace,
+                target: body.defaultTarget === 'global' ? 'global' : 'workspace',
                 rules: (body.rules ?? []).map((rule) => ({
                   id: rule.id,
                   effect: rule.effect === 'deny' ? 'deny' : 'allow',
@@ -201,10 +210,13 @@ window.__ModuleLoader__.load({
                 loading: false,
               });
             } else {
-              setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, rules: [], error: body.error ?? '无法生成规则预览', saving: false, loading: false });
+              setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'workspace', rules: [], error: body.error ?? '无法生成规则预览', saving: false, loading: false });
             }
           })
-          .catch((err) => setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, rules: [], error: err.message, saving: false, loading: false }));
+          .catch((err) => setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'workspace', rules: [], error: err.message, saving: false, loading: false }));
+      };
+      const changePreviewTarget = (target) => {
+        setPreview((prev) => prev ? { ...prev, target: target === 'global' ? 'global' : 'workspace' } : prev);
       };
       const changePreviewRule = (index, patch) => {
         setPreview((prev) => prev ? { ...prev, error: null, rules: prev.rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule) } : prev);
@@ -225,6 +237,7 @@ window.__ModuleLoader__.load({
         const itemId = preview.itemId;
         const itemCommand = preview.itemCommand;
         const workspace = preview.workspace;
+        const target = preview.target === 'global' ? 'global' : 'workspace';
         const rules = preview.rules.map((rule, index) => ({
           id: rule.id || `human-${Date.now()}-${index + 1}`,
           effect: rule.effect === 'deny' ? 'deny' : 'allow',
@@ -232,11 +245,11 @@ window.__ModuleLoader__.load({
           args: rule.args.map((value) => ({ kind: 'literal', value })),
         }));
         setPreview((prev) => prev ? { ...prev, saving: true, error: null } : prev);
-        return fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: itemId, decision: 'allow', scope: 'permanent', rules }) })
+        return fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: itemId, decision: 'allow', scope: 'permanent', rules, target }) })
           .then((r) => r.json().then((body) => ({ status: r.status, body })))
           .then(({ status, body }) => {
             if (status === 200 && body.ok) {
-              setGrants((prev) => ({ ...prev, [itemId]: { loading: false, command: itemCommand, workspace, rules: body.generatedRules ?? [] } }));
+              setGrants((prev) => ({ ...prev, [itemId]: { loading: false, command: itemCommand, workspace, rules: body.generatedRules ?? [], target: body.target ?? target } }));
               setPreview(null);
             } else {
               setPreview((prev) => prev ? { ...prev, saving: false, error: body.error ?? '写入失败' } : prev);
@@ -310,7 +323,7 @@ window.__ModuleLoader__.load({
                   const entry = grants[id];
                   return h('div', { key: `grant-${id}`, style: styles.grantResult },
                     entry.command && h('code', { style: styles.historyCommand }, entry.command),
-                    h('div', { style: styles.grantTitle }, `已生成并锁定 ${entry.rules.length} 条放行规则`),
+                    h('div', { style: styles.grantTitle }, `已生成并锁定 ${entry.rules.length} 条放行规则${entry.target === 'global' ? '（全局）' : '（当前工作区）'}`),
                     entry.rules.map((rule, i) => h(RuleRow, { key: rule.id ?? i, rule, index: i, compact: true })),
                     h('div', { style: styles.actions }, h(Button, { primary: true, onClick: () => viewRules(entry.rules) }, '在规则列表查看')),
                   );
@@ -366,6 +379,7 @@ window.__ModuleLoader__.load({
         ),
         preview && h(GrantPreviewDialog, {
           preview,
+          onChangeTarget: changePreviewTarget,
           onChangeRule: changePreviewRule,
           onAddRule: addPreviewRule,
           onRemoveRule: removePreviewRule,
@@ -457,6 +471,8 @@ window.__ModuleLoader__.load({
       dialogBody: { padding: 16, overflowY: 'auto', minHeight: 0 },
       dialogError: { marginBottom: 12, padding: '10px 12px', borderRadius: 8, border: '1px solid #ecc0c5', background: C.redBg, color: C.red, fontSize: 12 },
       dialogEmpty: { marginBottom: 12, color: C.muted, fontSize: 12 },
+      targetRow: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', marginBottom: 12, border: `1px solid ${C.line}`, borderRadius: 9, background: C.panel2 },
+      targetHint: { fontSize: 11, color: C.muted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       editorCard: { border: `1px solid ${C.line}`, borderRadius: 10, background: C.panel2, padding: '12px 14px', marginBottom: 10 },
       editorTop: { display: 'flex', alignItems: 'center', gap: 8 },
       editorIndex: { width: 24, height: 24, borderRadius: 6, background: '#ffffff', color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 },

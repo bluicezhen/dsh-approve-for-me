@@ -167,13 +167,14 @@ export async function apply(ctx, config = {}) {
     });
   };
 
-  const createPermanentGrant = async (entry, providedRules) => {
-    const store = await storeFor(entry.workspace);
+  const createPermanentGrant = async (entry, providedRules, requestedTarget) => {
+    const target = requestedTarget === 'global' ? 'global' : 'workspace';
+    const store = await storeFor(target === 'global' ? undefined : entry.workspace);
     const generatedRules = providedRules === undefined ? draftRulesFor(entry) : normalizeRules(providedRules);
     if (!generatedRules.length) throw new Error('没有可生成的待审批命令段');
     await store.save([...store.state.rules, ...generatedRules]);
     const confirmedState = await store.confirm();
-    return { generatedRules, confirmedState };
+    return { generatedRules, confirmedState, target };
   };
 
   ctx.effect(() => ctx.on('tools/pre-execute', async (exec, next) => {
@@ -216,7 +217,7 @@ export async function apply(ctx, config = {}) {
           if (!entry) return sendJson(res, 404, { ok: false, error: 'approval-not-found' });
           const rules = draftRulesFor(entry);
           if (!rules.length) return sendJson(res, 400, { ok: false, error: '没有可生成的待审批命令段' });
-          return sendJson(res, 200, { ok: true, workspace: entry.workspace, rules });
+          return sendJson(res, 200, { ok: true, workspace: entry.workspace, defaultTarget: 'workspace', targets: ['workspace', 'global'], rules });
         }
         if (req.method === 'POST' && suffix === '/decision') {
           const body = await readBody(req);
@@ -224,9 +225,9 @@ export async function apply(ctx, config = {}) {
           if (!entry) return sendJson(res, 404, { ok: false, error: 'approval-not-found' });
           if (body.decision === 'allow' && body.scope === 'permanent') {
             try {
-              const grant = await createPermanentGrant(entry, body.rules);
-              const ok = queue.decide(body.id, 'allow', 'permanent', { generatedRules: grant.generatedRules, rulesConfirmed: true });
-              return sendJson(res, ok ? 200 : 409, { ok, generatedRules: grant.generatedRules, rulesConfirmed: true, workspace: entry.workspace });
+              const grant = await createPermanentGrant(entry, body.rules, body.target);
+              const ok = queue.decide(body.id, 'allow', 'permanent', { generatedRules: grant.generatedRules, rulesConfirmed: true, target: grant.target });
+              return sendJson(res, ok ? 200 : 409, { ok, generatedRules: grant.generatedRules, rulesConfirmed: true, workspace: entry.workspace, target: grant.target });
             } catch (error) {
               return sendJson(res, 500, { ok: false, error: `规则生成或确认失败：${error.message}` });
             }

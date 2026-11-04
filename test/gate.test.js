@@ -149,3 +149,52 @@ test('permanent grant previews rules and writes the edited result', async () => 
     else process.env.DSH_HOME = previousHome;
   }
 });
+
+test('permanent grant can target the global rule store', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'afm-gate-global-'));
+  const previousHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = root;
+  try {
+    const { apply } = await import('../index.js');
+    const { ctx, listeners, getRoute } = makeCtx();
+    await apply(ctx, {});
+
+    const preExecute = listeners['tools/pre-execute'];
+    const exec = {
+      name: 'bash',
+      callId: 'call-global-1',
+      arguments: { command: 'node ./build.js', workdir: '/tmp/project-global-target' },
+      signal: new AbortController().signal,
+    };
+    const gatePromise = preExecute(exec, async () => ({ kind: 'allow' }));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const stateRes = await callRoute(getRoute(), 'GET', '/api/approve-for-me/state');
+    const approvalId = stateRes.body.queue.pending[0].id;
+
+    const previewRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/preview', { id: approvalId });
+    assert.equal(previewRes.status, 200);
+    assert.equal(previewRes.body.defaultTarget, 'workspace');
+    assert.deepEqual(previewRes.body.targets, ['workspace', 'global']);
+
+    const globalRules = [{ id: 'global-1', effect: 'allow', program: 'node', args: [{ kind: 'literal', value: './build.js' }] }];
+    const decisionRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/decision', { id: approvalId, decision: 'allow', scope: 'permanent', target: 'global', rules: globalRules });
+    assert.equal(decisionRes.status, 200);
+    assert.equal(decisionRes.body.target, 'global');
+    assert.equal(decisionRes.body.generatedRules[0].id, 'global-1');
+
+    await gatePromise;
+
+    const afterRes = await callRoute(getRoute(), 'GET', '/api/approve-for-me/state');
+    const globalStore = afterRes.body.stores.find((store) => !store.workspace);
+    const workspaceStore = afterRes.body.stores.find((store) => store.workspace === '/tmp/project-global-target');
+    assert.ok(globalStore, 'global store should be present');
+    assert.ok(globalStore.rules.some((rule) => rule.id === 'global-1'), 'rule should be written to the global store');
+    assert.equal(globalStore.confirmed, true);
+    assert.ok(workspaceStore, 'workspace store should still be present');
+    assert.equal(workspaceStore.rules.some((rule) => rule.id === 'global-1'), false, 'global rule should not be written to the workspace store');
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previousHome;
+  }
+});
