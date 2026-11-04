@@ -245,6 +245,13 @@ export async function apply(ctx, config = {}) {
           const store = await storeFor(body.workspace);
           return sendJson(res, 200, { ok: true, state: await store.save(body.rules ?? []) });
         }
+        if (req.method === 'POST' && suffix === '/rules/delete') {
+          const body = await readBody(req);
+          const store = await storeFor(body.workspace);
+          const next = store.state.rules.filter((rule) => rule.id !== body.id);
+          if (next.length === store.state.rules.length) return sendJson(res, 404, { ok: false, error: 'rule-not-found' });
+          return sendJson(res, 200, { ok: true, state: await store.save(next) });
+        }
         return sendJson(res, 404, { error: 'not-found' });
       } catch (error) { return sendJson(res, 400, { error: error.message }); }
     },

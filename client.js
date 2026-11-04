@@ -83,7 +83,7 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function RuleRow({ rule, index, compact, highlight }) {
+    function RuleRow({ rule, index, compact, highlight, onDelete }) {
       const generatedId = typeof rule.id === 'string' && /^human-\d+-\d+$/.test(rule.id);
       const baseStyle = compact ? { ...styles.ruleRow, ...styles.ruleRowCompact } : styles.ruleRow;
       return h('div', { style: highlight ? { ...baseStyle, ...styles.ruleRowHighlight } : baseStyle, 'data-rule-id': rule.id ?? '' },
@@ -93,6 +93,7 @@ window.__ModuleLoader__.load({
             !generatedId && h('strong', { style: styles.ruleId }, rule.id ?? '未命名规则'),
             h('span', { style: rule.effect === 'deny' ? styles.denyTag : styles.allowTag }, rule.effect === 'deny' ? '拒绝' : '放行'),
             highlight && h('span', { style: styles.newTag }, '新'),
+            onDelete && h('button', { type: 'button', style: styles.ruleDeleteButton, title: '删除规则', 'aria-label': '删除规则', onClick: (event) => { event.stopPropagation(); onDelete(); } }, '删除'),
           ),
           h('div', { style: styles.ruleDetails },
             h('span', null, `程序：${rule.program ?? '*'}`),
@@ -165,6 +166,36 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function DeleteRuleDialog({ target, busy, error, onCancel, onConfirm }) {
+      const rule = target.rule;
+      return h('div', { style: styles.overlay, onClick: onCancel },
+        h('div', { style: styles.dialogSmall, onClick: (event) => event.stopPropagation() },
+          h('div', { style: styles.dialogHead },
+            h('div', null,
+              h('div', { style: styles.dialogTitle }, '删除规则'),
+              h('div', { style: styles.dialogSub }, target.workspace ? '从当前工作区规则中删除' : '从全局规则中删除'),
+            ),
+            h('button', { type: 'button', style: styles.dialogClose, onClick: onCancel, 'aria-label': '关闭' }, '×'),
+          ),
+          h('div', { style: styles.dialogBody },
+            error && h('div', { style: styles.dialogError }, error),
+            h('div', { style: styles.deletePreview },
+              h('div', { style: styles.deleteProgram }, rule.program ?? '*'),
+              h('div', { style: styles.deleteArgs }, `参数：${formatArgs(rule.args)}`),
+            ),
+            h('div', { style: styles.deleteNote }, '删除后规则库会变为待确认状态，需要确认规则后才会恢复自动放行。'),
+          ),
+          h('div', { style: styles.dialogFoot },
+            h('span', { style: styles.dialogNote }, target.workspace ? '目标：当前工作区' : '目标：全局'),
+            h('div', { style: styles.actions },
+              h(Button, { onClick: onCancel }, '取消'),
+              h(Button, { danger: true, disabled: busy, onClick: onConfirm }, busy ? '删除中…' : '删除'),
+            ),
+          ),
+        ),
+      );
+    }
+
     function Page() {
       const [state, setState] = React.useState({ queue: { pending: [], history: [] }, stores: [] });
       const [error, setError] = React.useState(null);
@@ -178,6 +209,7 @@ window.__ModuleLoader__.load({
       const [focusRuleIds, setFocusRuleIds] = React.useState([]);
       const [selectedId, setSelectedId] = React.useState(null);
       const [preview, setPreview] = React.useState(null);
+      const [deleteTarget, setDeleteTarget] = React.useState(null);
       const rulesRef = React.useRef(null);
       const refresh = React.useCallback(() => fetch(`${API}/state`).then((r) => r.json()).then((next) => {
         const safe = {
@@ -268,6 +300,24 @@ window.__ModuleLoader__.load({
         setConfirming(true);
         return fetch(`${API}/rules/confirm`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace }) }).then(refresh).finally(() => setConfirming(false));
       };
+      const requestDeleteRule = (store, rule) => setDeleteTarget({ workspace: store.workspace, rule, busy: false, error: null });
+      const cancelDeleteRule = () => setDeleteTarget(null);
+      const confirmDeleteRule = () => {
+        if (!deleteTarget) return;
+        const { workspace, rule } = deleteTarget;
+        setDeleteTarget((prev) => prev ? { ...prev, busy: true, error: null } : prev);
+        return fetch(`${API}/rules/delete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspace, id: rule.id }) })
+          .then((r) => r.json().then((body) => ({ status: r.status, body })))
+          .then(({ status, body }) => {
+            if (status === 200 && body.ok) {
+              setDeleteTarget(null);
+              refresh();
+            } else {
+              setDeleteTarget((prev) => prev ? { ...prev, busy: false, error: body.error ?? '删除失败' } : prev);
+            }
+          })
+          .catch((err) => setDeleteTarget((prev) => prev ? { ...prev, busy: false, error: err.message } : prev));
+      };
       if (error) return h('div', { style: styles.page }, h('div', { style: styles.errorBox }, h('h2', null, '界面渲染错误'), h('pre', { style: styles.errorPre }, error), h(Button, { onClick: () => { setError(null); refresh(); } }, '重试')));
       const unconfirmedStores = state.stores.filter((store) => !store.confirmed);
       const pending = state.queue.pending;
@@ -351,7 +401,7 @@ window.__ModuleLoader__.load({
                     sub: `${rules.length}/${store.rules.length} 条 · ${store.confirmed ? '已确认' : '待确认'}${store.workspace ? ` · ${store.workspace}` : ''}`,
                     actions: !store.confirmed && h(Button, { primary: true, disabled: confirming, onClick: () => confirmRules(store.workspace) }, confirming ? '确认中…' : '确认规则'),
                   },
-                    rules.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '没有匹配的规则。')) : h('div', { style: styles.rulesList }, rules.slice().reverse().map((rule, index) => h(RuleRow, { key: rule.id ?? index, rule, index, highlight: focusRuleIds.includes(rule.id) }))),
+                    rules.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '没有匹配的规则。')) : h('div', { style: styles.rulesList }, rules.slice().reverse().map((rule, index) => h(RuleRow, { key: rule.id ?? index, rule, index, highlight: focusRuleIds.includes(rule.id), onDelete: rule.id ? () => requestDeleteRule(store, rule) : undefined }))),
                     (store.added.length > 0 || store.removed.length > 0 || store.modified.length > 0) && h('div', { style: styles.changeBox },
                       h('div', { style: styles.sectionLabel }, '待确认变更'),
                       store.added.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `新增 ${store.added.length} 条`), store.added.map((rule, i) => h(RuleRow, { key: `added-${rule.id ?? i}`, rule, index: i }))),
@@ -385,6 +435,13 @@ window.__ModuleLoader__.load({
           onRemoveRule: removePreviewRule,
           onCancel: () => setPreview(null),
           onConfirm: commitPreview,
+        }),
+        deleteTarget && h(DeleteRuleDialog, {
+          target: deleteTarget,
+          busy: deleteTarget.busy,
+          error: deleteTarget.error,
+          onCancel: cancelDeleteRule,
+          onConfirm: confirmDeleteRule,
         }),
       );
     }
@@ -444,6 +501,7 @@ window.__ModuleLoader__.load({
       ruleHeader: { display: 'flex', alignItems: 'center', gap: 7, marginBottom: 2 },
       ruleId: { fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 11.5, color: '#344660' },
       ruleDetails: { display: 'flex', flexWrap: 'wrap', gap: 10, color: C.muted, fontSize: 11.5 },
+      ruleDeleteButton: { marginLeft: 'auto', border: 0, background: 'transparent', color: C.red, fontSize: 11, cursor: 'pointer', padding: '0 2px' },
       allowTag: { color: C.green, fontSize: 11.5, fontWeight: 600 },
       denyTag: { color: C.red, fontSize: 11.5, fontWeight: 600 },
       muted: { color: C.muted, fontSize: 13 },
@@ -490,6 +548,11 @@ window.__ModuleLoader__.load({
       editorScope: { marginTop: 9, fontSize: 11, color: C.muted },
       dialogFoot: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '14px 20px', borderTop: `1px solid ${C.line}`, background: C.panel },
       dialogNote: { fontSize: 12, color: C.muted },
+      dialogSmall: { width: '100%', maxWidth: 460, display: 'flex', flexDirection: 'column', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: '0 24px 70px rgba(23, 32, 51, 0.28)', overflow: 'hidden' },
+      deletePreview: { border: `1px solid ${C.line}`, borderRadius: 9, background: C.panel2, padding: '12px 14px', marginBottom: 10 },
+      deleteProgram: { fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 14, fontWeight: 700, color: C.text },
+      deleteArgs: { fontSize: 12, color: C.muted, marginTop: 6, wordBreak: 'break-word' },
+      deleteNote: { fontSize: 12, color: C.yellowText, lineHeight: 1.5 },
       iconWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
       iconBadge: { position: 'absolute', top: -8, right: -12, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 999, background: C.red, color: '#fff', fontSize: 10, lineHeight: '16px', textAlign: 'center', fontWeight: 700 },
       iconDot: { position: 'absolute', top: -8, right: -10, minWidth: 15, height: 15, padding: '0 3px', borderRadius: 999, background: C.yellowText, color: '#fff', fontSize: 10, lineHeight: '15px', textAlign: 'center', fontWeight: 700 },

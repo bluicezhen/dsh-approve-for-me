@@ -198,3 +198,48 @@ test('permanent grant can target the global rule store', async () => {
     else process.env.DSH_HOME = previousHome;
   }
 });
+
+test('deleting a rule removes it and marks the rule store unconfirmed', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'afm-gate-delete-'));
+  const previousHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = root;
+  try {
+    const { apply } = await import('../index.js');
+    const { ctx, listeners, getRoute } = makeCtx();
+    await apply(ctx, {});
+
+    const preExecute = listeners['tools/pre-execute'];
+    const exec = {
+      name: 'bash',
+      callId: 'call-delete-1',
+      arguments: { command: 'node ./build.js', workdir: '/tmp/project-delete' },
+      signal: new AbortController().signal,
+    };
+    const gatePromise = preExecute(exec, async () => ({ kind: 'allow' }));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const stateRes = await callRoute(getRoute(), 'GET', '/api/approve-for-me/state');
+    const approvalId = stateRes.body.queue.pending[0].id;
+
+    const grantRules = [{ id: 'delete-me', effect: 'allow', program: 'node', args: [{ kind: 'literal', value: './build.js' }] }];
+    const decisionRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/decision', { id: approvalId, decision: 'allow', scope: 'permanent', target: 'workspace', rules: grantRules });
+    assert.equal(decisionRes.status, 200);
+    await gatePromise;
+
+    const deleteRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/rules/delete', { workspace: '/tmp/project-delete', id: 'delete-me' });
+    assert.equal(deleteRes.status, 200);
+    assert.equal(deleteRes.body.ok, true);
+    assert.equal(deleteRes.body.state.rules.some((rule) => rule.id === 'delete-me'), false, 'rule should be removed');
+    assert.equal(deleteRes.body.state.confirmed, false, 'deleting a rule should require re-confirmation');
+
+    const confirmRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/rules/confirm', { workspace: '/tmp/project-delete' });
+    assert.equal(confirmRes.status, 200);
+    assert.equal(confirmRes.body.state.confirmed, true);
+
+    const missingRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/rules/delete', { workspace: '/tmp/project-delete', id: 'not-there' });
+    assert.equal(missingRes.status, 404);
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previousHome;
+  }
+});
