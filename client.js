@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
 
     const act = (fn) => (event) => { event.stopPropagation(); fn(); };
 
-    function ApprovalCard({ item, decide, grant, grantState, onViewRules, selected, onSelect }) {
+    function ApprovalCard({ item, decide, previewGrant, grantState, onViewRules, selected, onSelect }) {
       const state = grantState ?? {};
       const busy = state.loading;
       const generated = Array.isArray(state.rules) ? state.rules : null;
@@ -59,7 +59,7 @@ window.__ModuleLoader__.load({
           h('span', { style: styles.time }, item.createdAt ? new Date(item.createdAt).toLocaleString() : ''),
         ),
         h('div', { style: styles.reason }, item.reason),
-        state.error && h('div', { style: styles.grantError }, h('strong', null, '规则生成失败：'), h('span', null, state.error), h('div', { style: styles.actions }, h(Button, { onClick: act(() => grant(item)) }, '重试'))),
+        state.error && h('div', { style: styles.grantError }, h('strong', null, '规则生成失败：'), h('span', null, state.error), h('div', { style: styles.actions }, h(Button, { onClick: act(() => previewGrant(item)) }, '重试'))),
         generated && generated.length > 0 && h('div', { style: styles.grantResult },
           h('div', { style: styles.grantTitle }, `已生成并锁定 ${generated.length} 条放行规则`),
           generated.map((rule, i) => h(RuleRow, { key: rule.id ?? i, rule, index: i, compact: true })),
@@ -68,7 +68,7 @@ window.__ModuleLoader__.load({
         !generated && !busy && h('div', { style: styles.actions },
           h(Button, { onClick: act(() => decide(item.id, 'allow', 'once')) }, '仅此次'),
           h(Button, { onClick: act(() => decide(item.id, 'allow', 'session')) }, '本会话'),
-          h(Button, { primary: true, onClick: act(() => grant(item)) }, '长期并锁定规则'),
+          h(Button, { primary: true, onClick: act(() => previewGrant(item)) }, '长期并锁定规则…'),
           h(Button, { danger: true, onClick: act(() => decide(item.id, 'deny', 'once')) }, '拒绝'),
         ),
         busy && h('div', { style: styles.actions }, h(Button, { primary: true, disabled: true }, '正在生成并锁定规则…')),
@@ -106,6 +106,55 @@ window.__ModuleLoader__.load({
       return args.map((arg) => typeof arg === 'string' ? arg : `${arg.kind ?? '匹配'}${arg.value ? `=${arg.value}` : ''}`).join(' ');
     }
 
+    function GrantPreviewDialog({ preview, onChangeRule, onAddRule, onRemoveRule, onCancel, onConfirm }) {
+      const saving = preview.saving;
+      return h('div', { style: styles.overlay, onClick: onCancel },
+        h('div', { style: styles.dialog, onClick: (event) => event.stopPropagation() },
+          h('div', { style: styles.dialogHead },
+            h('div', null,
+              h('div', { style: styles.dialogTitle }, '预览并确认长期放行规则'),
+              h('div', { style: styles.dialogSub }, '下面是将写入并立即确认的规则，可直接修改后再保存。'),
+            ),
+            h('button', { type: 'button', style: styles.dialogClose, onClick: onCancel, 'aria-label': '关闭' }, '×'),
+          ),
+          h('div', { style: styles.dialogBody },
+            preview.loading && h('div', { style: styles.dialogEmpty }, '正在生成规则预览…'),
+            preview.error && h('div', { style: styles.dialogError }, preview.error),
+            !preview.loading && preview.rules.length === 0 && h('div', { style: styles.dialogEmpty }, '至少保留一条规则才能写入。'),
+            preview.rules.map((rule, index) => h('div', { key: rule.id || index, style: styles.editorCard },
+              h('div', { style: styles.editorTop },
+                h('span', { style: styles.editorIndex }, String(index + 1).padStart(2, '0')),
+                h('select', { value: rule.effect, onChange: (event) => onChangeRule(index, { effect: event.target.value }), style: styles.select },
+                  h('option', { value: 'allow' }, '放行'),
+                  h('option', { value: 'deny' }, '拒绝'),
+                ),
+                h('input', { value: rule.program, placeholder: '程序', onChange: (event) => onChangeRule(index, { program: event.target.value }), style: styles.programInput }),
+                h('button', { type: 'button', style: styles.textButton, onClick: () => onRemoveRule(index) }, '删除'),
+              ),
+              h('div', { style: styles.argsRow },
+                h('span', { style: styles.editorLabel }, '参数'),
+                rule.args.length === 0 && h('span', { style: styles.editorEmptyArg }, '无参数'),
+                rule.args.map((arg, argIndex) => h('span', { key: argIndex, style: styles.argChip },
+                  h('input', { value: arg, placeholder: '参数值', onChange: (event) => { const args = rule.args.slice(); args[argIndex] = event.target.value; onChangeRule(index, { args }); }, style: styles.argInput }),
+                  h('button', { type: 'button', style: styles.argRemove, onClick: () => { const args = rule.args.slice(); args.splice(argIndex, 1); onChangeRule(index, { args }); }, 'aria-label': '移除参数' }, '×'),
+                )),
+                h('button', { type: 'button', style: styles.addArg, onClick: () => onChangeRule(index, { args: [...rule.args, ''] }) }, '+ 参数'),
+              ),
+              h('div', { style: styles.editorScope }, '作用域：长期（human）'),
+            )),
+            !preview.loading && h('button', { type: 'button', style: styles.addRuleButton, onClick: onAddRule }, '+ 添加规则'),
+          ),
+          h('div', { style: styles.dialogFoot },
+            h('span', { style: styles.dialogNote }, `共 ${preview.rules.length} 条规则`),
+            h('div', { style: styles.actions },
+              h(Button, { onClick: onCancel }, '取消'),
+              h(Button, { primary: true, disabled: saving || preview.loading || preview.rules.length === 0, onClick: onConfirm }, saving ? '正在写入…' : '写入并确认'),
+            ),
+          ),
+        ),
+      );
+    }
+
     function Page() {
       const [state, setState] = React.useState({ queue: { pending: [], history: [] }, stores: [] });
       const [error, setError] = React.useState(null);
@@ -118,6 +167,7 @@ window.__ModuleLoader__.load({
       const [grants, setGrants] = React.useState({});
       const [focusRuleIds, setFocusRuleIds] = React.useState([]);
       const [selectedId, setSelectedId] = React.useState(null);
+      const [preview, setPreview] = React.useState(null);
       const rulesRef = React.useRef(null);
       const refresh = React.useCallback(() => fetch(`${API}/state`).then((r) => r.json()).then((next) => {
         const safe = {
@@ -128,18 +178,69 @@ window.__ModuleLoader__.load({
       }).catch((err) => setError(err.message)), []);
       React.useEffect(() => { refresh(); const timer = setInterval(refresh, 500); return () => clearInterval(timer); }, [refresh]);
       const decide = (id, decision, scope) => fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, decision, scope }) }).then(refresh);
-      const grant = (item) => {
-        setGrants((prev) => ({ ...prev, [item.id]: { loading: true, command: item.command, workspace: item.workspace } }));
-        return fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: item.id, decision: 'allow', scope: 'permanent' }) })
+      const previewGrant = (item) => {
+        setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, rules: [], error: null, saving: false, loading: true });
+        return fetch(`${API}/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: item.id }) })
           .then((r) => r.json().then((body) => ({ status: r.status, body })))
           .then(({ status, body }) => {
             if (status === 200 && body.ok) {
-              setGrants((prev) => ({ ...prev, [item.id]: { loading: false, command: item.command, workspace: item.workspace, rules: body.generatedRules ?? [] } }));
+              setPreview({
+                itemId: item.id,
+                itemCommand: item.command,
+                workspace: body.workspace ?? item.workspace,
+                rules: (body.rules ?? []).map((rule) => ({
+                  id: rule.id,
+                  effect: rule.effect === 'deny' ? 'deny' : 'allow',
+                  program: rule.program ?? '',
+                  args: (rule.args ?? []).map((arg) => typeof arg === 'string' ? arg : arg?.kind === 'literal' ? arg.value : ''),
+                })),
+                error: null,
+                saving: false,
+                loading: false,
+              });
             } else {
-              setGrants((prev) => ({ ...prev, [item.id]: { loading: false, command: item.command, error: body.error ?? '未知错误' } }));
+              setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, rules: [], error: body.error ?? '无法生成规则预览', saving: false, loading: false });
             }
           })
-          .catch((err) => setGrants((prev) => ({ ...prev, [item.id]: { loading: false, command: item.command, error: err.message } })))
+          .catch((err) => setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, rules: [], error: err.message, saving: false, loading: false }));
+      };
+      const changePreviewRule = (index, patch) => {
+        setPreview((prev) => prev ? { ...prev, error: null, rules: prev.rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule) } : prev);
+      };
+      const addPreviewRule = () => {
+        setPreview((prev) => prev ? { ...prev, error: null, rules: [...prev.rules, { id: `human-${Date.now()}-${prev.rules.length + 1}`, effect: 'allow', program: '', args: [] }] } : prev);
+      };
+      const removePreviewRule = (index) => {
+        setPreview((prev) => prev ? { ...prev, rules: prev.rules.filter((_, i) => i !== index) } : prev);
+      };
+      const commitPreview = () => {
+        if (!preview) return;
+        const invalidIndex = preview.rules.findIndex((rule) => !rule.program.trim());
+        if (invalidIndex >= 0) {
+          setPreview((prev) => prev ? { ...prev, error: `第 ${invalidIndex + 1} 条规则缺少程序` } : prev);
+          return;
+        }
+        const itemId = preview.itemId;
+        const itemCommand = preview.itemCommand;
+        const workspace = preview.workspace;
+        const rules = preview.rules.map((rule, index) => ({
+          id: rule.id || `human-${Date.now()}-${index + 1}`,
+          effect: rule.effect === 'deny' ? 'deny' : 'allow',
+          program: rule.program.trim(),
+          args: rule.args.map((value) => ({ kind: 'literal', value })),
+        }));
+        setPreview((prev) => prev ? { ...prev, saving: true, error: null } : prev);
+        return fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: itemId, decision: 'allow', scope: 'permanent', rules }) })
+          .then((r) => r.json().then((body) => ({ status: r.status, body })))
+          .then(({ status, body }) => {
+            if (status === 200 && body.ok) {
+              setGrants((prev) => ({ ...prev, [itemId]: { loading: false, command: itemCommand, workspace, rules: body.generatedRules ?? [] } }));
+              setPreview(null);
+            } else {
+              setPreview((prev) => prev ? { ...prev, saving: false, error: body.error ?? '写入失败' } : prev);
+            }
+          })
+          .catch((err) => setPreview((prev) => prev ? { ...prev, saving: false, error: err.message } : prev))
           .then(refresh);
       };
       const goRules = () => rulesRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -190,7 +291,7 @@ window.__ModuleLoader__.load({
                 ),
                 pending.length === 0
                   ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '当前没有待审批命令。'))
-                  : pending.map((item) => h(ApprovalCard, { key: item.id, item, decide, grant, grantState: grants[item.id], onViewRules: viewRules, selected: selectedItem?.id === item.id, onSelect: setSelectedId })),
+                  : pending.map((item) => h(ApprovalCard, { key: item.id, item, decide, previewGrant, grantState: grants[item.id], onViewRules: viewRules, selected: selectedItem?.id === item.id, onSelect: setSelectedId })),
               ),
               h('div', { style: styles.group },
                 h('div', { style: styles.groupHead },
@@ -261,6 +362,14 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
+        preview && h(GrantPreviewDialog, {
+          preview,
+          onChangeRule: changePreviewRule,
+          onAddRule: addPreviewRule,
+          onRemoveRule: removePreviewRule,
+          onCancel: () => setPreview(null),
+          onConfirm: commitPreview,
+        }),
       );
     }
 
@@ -336,6 +445,32 @@ window.__ModuleLoader__.load({
       segment: { padding: '6px 10px', background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, marginBottom: 6, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12, color: C.text, wordBreak: 'break-word' },
       errorBox: { padding: 24, margin: 24, border: `1px solid ${C.red}`, borderRadius: 10, background: C.redBg },
       errorPre: { whiteSpace: 'pre-wrap', overflowWrap: 'break-word', fontSize: 12, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
+      overlay: { position: 'fixed', inset: 0, background: 'rgba(23, 32, 51, 0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 50 },
+      dialog: { width: '100%', maxWidth: 720, maxHeight: '85vh', display: 'flex', flexDirection: 'column', background: C.panel, border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: '0 24px 70px rgba(23, 32, 51, 0.28)', overflow: 'hidden' },
+      dialogHead: { display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, padding: '18px 20px', borderBottom: `1px solid ${C.line}` },
+      dialogTitle: { fontSize: 16, fontWeight: 700, color: C.text },
+      dialogSub: { fontSize: 12, color: C.muted, marginTop: 4 },
+      dialogClose: { border: 0, background: 'transparent', color: C.muted, fontSize: 22, lineHeight: 1, cursor: 'pointer', padding: '0 4px' },
+      dialogBody: { padding: 16, overflowY: 'auto', minHeight: 0 },
+      dialogError: { marginBottom: 12, padding: '10px 12px', borderRadius: 8, border: '1px solid #ecc0c5', background: C.redBg, color: C.red, fontSize: 12 },
+      dialogEmpty: { marginBottom: 12, color: C.muted, fontSize: 12 },
+      editorCard: { border: `1px solid ${C.line}`, borderRadius: 10, background: C.panel2, padding: '12px 14px', marginBottom: 10 },
+      editorTop: { display: 'flex', alignItems: 'center', gap: 8 },
+      editorIndex: { width: 24, height: 24, borderRadius: 6, background: '#ffffff', color: C.muted, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0 },
+      select: { border: `1px solid ${C.line}`, borderRadius: 7, background: '#ffffff', color: C.text, fontSize: 12, padding: '6px 8px', fontFamily: 'inherit' },
+      programInput: { flex: 1, minWidth: 0, border: `1px solid ${C.line}`, borderRadius: 7, background: '#ffffff', color: C.text, fontSize: 13, padding: '6px 9px', fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
+      textButton: { border: 0, background: 'transparent', color: C.red, fontSize: 12, cursor: 'pointer', padding: '4px 6px' },
+      argsRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 },
+      editorLabel: { fontSize: 11, color: C.muted, fontWeight: 600 },
+      editorEmptyArg: { fontSize: 12, color: C.muted },
+      argChip: { display: 'inline-flex', alignItems: 'center', border: `1px solid ${C.line}`, borderRadius: 7, background: '#ffffff', overflow: 'hidden' },
+      argInput: { border: 0, outline: 'none', background: 'transparent', color: C.text, fontSize: 12, padding: '6px 8px', width: 110, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
+      argRemove: { border: 0, borderLeft: `1px solid ${C.line}`, background: 'transparent', color: C.muted, cursor: 'pointer', fontSize: 14, padding: '2px 7px' },
+      addArg: { border: `1px dashed ${C.line}`, borderRadius: 7, background: '#ffffff', color: C.accent, fontSize: 12, cursor: 'pointer', padding: '5px 9px' },
+      addRuleButton: { width: '100%', border: `1px dashed ${C.line}`, borderRadius: 8, background: '#ffffff', color: C.accent, fontSize: 12, cursor: 'pointer', padding: '8px 10px', marginTop: 2 },
+      editorScope: { marginTop: 9, fontSize: 11, color: C.muted },
+      dialogFoot: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '14px 20px', borderTop: `1px solid ${C.line}`, background: C.panel },
+      dialogNote: { fontSize: 12, color: C.muted },
       iconWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
       iconBadge: { position: 'absolute', top: -8, right: -12, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 999, background: C.red, color: '#fff', fontSize: 10, lineHeight: '16px', textAlign: 'center', fontWeight: 700 },
       iconDot: { position: 'absolute', top: -8, right: -10, minWidth: 15, height: 15, padding: '0 3px', borderRadius: 999, background: C.yellowText, color: '#fff', fontSize: 10, lineHeight: '15px', textAlign: 'center', fontWeight: 700 },

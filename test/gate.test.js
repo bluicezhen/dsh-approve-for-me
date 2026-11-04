@@ -93,3 +93,59 @@ test('permanent grant saves and confirms a rule in one action', async () => {
     else process.env.DSH_HOME = previousHome;
   }
 });
+
+test('permanent grant previews rules and writes the edited result', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'afm-gate-preview-'));
+  const previousHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = root;
+  try {
+    const { apply } = await import('../index.js');
+    const { ctx, listeners, getRoute } = makeCtx();
+    await apply(ctx, {});
+
+    const preExecute = listeners['tools/pre-execute'];
+    const exec = {
+      name: 'bash',
+      callId: 'call-preview-1',
+      arguments: { command: 'node ./build.js', workdir: '/tmp/project-preview' },
+      signal: new AbortController().signal,
+    };
+    let nextCalled = false;
+    const gatePromise = preExecute(exec, async () => { nextCalled = true; return { kind: 'allow' }; });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const stateRes = await callRoute(getRoute(), 'GET', '/api/approve-for-me/state');
+    const approvalId = stateRes.body.queue.pending[0].id;
+
+    const previewRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/preview', { id: approvalId });
+    assert.equal(previewRes.status, 200);
+    assert.equal(previewRes.body.ok, true);
+    assert.equal(previewRes.body.rules.length, 1);
+    assert.equal(previewRes.body.rules[0].program, 'node');
+    assert.deepEqual(previewRes.body.rules[0].args, [{ kind: 'literal', value: './build.js' }]);
+
+    // Preview must not persist anything.
+    const beforeWrite = await callRoute(getRoute(), 'GET', '/api/approve-for-me/state');
+    const storeBefore = beforeWrite.body.stores.find((store) => store.workspace === '/tmp/project-preview');
+    assert.ok(storeBefore);
+    assert.equal(storeBefore.rules.some((rule) => rule.program === 'node'), false, 'preview should not write rules');
+
+    const editedRules = [{ id: 'custom-1', effect: 'allow', program: 'node', args: [{ kind: 'literal', value: './other.js' }] }];
+    const decisionRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/decision', { id: approvalId, decision: 'allow', scope: 'permanent', rules: editedRules });
+    assert.equal(decisionRes.status, 200);
+    assert.equal(decisionRes.body.ok, true);
+    assert.equal(decisionRes.body.generatedRules[0].id, 'custom-1');
+    assert.deepEqual(decisionRes.body.generatedRules[0].args, [{ kind: 'literal', value: './other.js' }]);
+
+    await gatePromise;
+    assert.equal(nextCalled, true);
+
+    const afterRes = await callRoute(getRoute(), 'GET', '/api/approve-for-me/state');
+    const storeAfter = afterRes.body.stores.find((store) => store.workspace === '/tmp/project-preview');
+    assert.ok(storeAfter.rules.some((rule) => rule.id === 'custom-1' && rule.args[0].value === './other.js'), 'edited rule should be written');
+    assert.equal(storeAfter.confirmed, true);
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previousHome;
+  }
+});

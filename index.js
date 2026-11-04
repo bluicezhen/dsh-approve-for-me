@@ -132,16 +132,44 @@ export async function apply(ctx, config = {}) {
     return outcome;
   };
 
-  const createPermanentGrant = async (entry) => {
+  const draftRulesFor = (entry) => {
+    const segments = (entry.decision?.segments ?? []).filter((s) => s.verdict !== 'auto-allow');
+    const now = Date.now();
+    return segments
+      .filter((segment) => segment.argv?.[0])
+      .map((segment, index) => ({
+        id: `human-${now}-${index + 1}`,
+        effect: 'allow',
+        program: segment.argv[0],
+        args: segment.argv.slice(1).map((value) => ({ kind: 'literal', value })),
+        scope: 'human',
+      }));
+  };
+
+  const normalizeRules = (rules) => {
+    if (!Array.isArray(rules) || rules.length === 0) throw new Error('至少需要一条规则');
+    return rules.map((rule, index) => {
+      const program = typeof rule?.program === 'string' ? rule.program.trim() : '';
+      if (!program) throw new Error(`第 ${index + 1} 条规则缺少程序`);
+      const effect = rule?.effect === 'deny' ? 'deny' : 'allow';
+      const args = (Array.isArray(rule?.args) ? rule.args : []).map((arg) => {
+        if (typeof arg === 'string') return { kind: 'literal', value: arg };
+        if (arg && typeof arg === 'object' && typeof arg.kind === 'string') return arg;
+        return null;
+      }).filter(Boolean);
+      return {
+        id: typeof rule?.id === 'string' && rule.id ? rule.id : `human-${Date.now()}-${index + 1}`,
+        effect,
+        program,
+        args,
+        scope: 'human',
+      };
+    });
+  };
+
+  const createPermanentGrant = async (entry, providedRules) => {
     const store = await storeFor(entry.workspace);
-    const segments = entry.decision?.segments?.filter((s) => s.verdict !== 'auto-allow') ?? [];
-    const generatedRules = segments.map((segment, index) => ({
-      id: `human-${Date.now()}-${index + 1}`,
-      effect: 'allow',
-      program: segment.argv?.[0],
-      args: (segment.argv ?? []).slice(1).map((value) => ({ kind: 'literal', value })),
-      scope: 'human',
-    }));
+    const generatedRules = providedRules === undefined ? draftRulesFor(entry) : normalizeRules(providedRules);
     if (!generatedRules.length) throw new Error('没有可生成的待审批命令段');
     await store.save([...store.state.rules, ...generatedRules]);
     const confirmedState = await store.confirm();
@@ -182,13 +210,21 @@ export async function apply(ctx, config = {}) {
           });
           return sendJson(res, 200, { queue: queue.snapshot(), stores: snapshots });
         }
+        if (req.method === 'POST' && suffix === '/preview') {
+          const body = await readBody(req);
+          const entry = queue.pending.get(body.id);
+          if (!entry) return sendJson(res, 404, { ok: false, error: 'approval-not-found' });
+          const rules = draftRulesFor(entry);
+          if (!rules.length) return sendJson(res, 400, { ok: false, error: '没有可生成的待审批命令段' });
+          return sendJson(res, 200, { ok: true, workspace: entry.workspace, rules });
+        }
         if (req.method === 'POST' && suffix === '/decision') {
           const body = await readBody(req);
           const entry = queue.pending.get(body.id);
           if (!entry) return sendJson(res, 404, { ok: false, error: 'approval-not-found' });
           if (body.decision === 'allow' && body.scope === 'permanent') {
             try {
-              const grant = await createPermanentGrant(entry);
+              const grant = await createPermanentGrant(entry, body.rules);
               const ok = queue.decide(body.id, 'allow', 'permanent', { generatedRules: grant.generatedRules, rulesConfirmed: true });
               return sendJson(res, ok ? 200 : 409, { ok, generatedRules: grant.generatedRules, rulesConfirmed: true, workspace: entry.workspace });
             } catch (error) {
