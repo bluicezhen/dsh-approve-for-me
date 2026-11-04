@@ -46,11 +46,39 @@ window.__ModuleLoader__.load({
 
     const act = (fn) => (event) => { event.stopPropagation(); fn(); };
 
+    function segmentDisplay(segment, decision) {
+      if (typeof segment === 'string') return { text: segment, verdict: 'pending', reason: decision?.reason ?? '命令包含无法静态判定的构造' };
+      return { text: segment?.text ?? '', verdict: segment?.verdict ?? 'pending', reason: segment?.reason ?? '' };
+    }
+
+    function SegmentList({ decision, onlyBlocked, compact }) {
+      const all = Array.isArray(decision?.segments) ? decision.segments : [];
+      const items = onlyBlocked ? all.filter((segment) => typeof segment === 'string' || segment.verdict !== 'auto-allow') : all;
+      if (!items.length) return null;
+      return h('div', { style: compact ? styles.segmentListCompact : styles.segmentList },
+        items.map((segment, index) => {
+          const info = segmentDisplay(segment, decision);
+          const tagStyle = info.verdict === 'auto-allow' ? styles.segmentTagAllow : info.verdict === 'denied' ? styles.segmentTagDeny : styles.segmentTagPending;
+          const tagText = info.verdict === 'auto-allow' ? '可放行' : info.verdict === 'denied' ? '拦截' : '待审批';
+          return h('div', { key: index, style: styles.segmentRow },
+            h('div', { style: styles.segmentHead },
+              h('span', { style: tagStyle }, tagText),
+              h('code', { style: styles.segmentText }, info.text),
+            ),
+            info.reason && h('div', { style: styles.segmentReason }, info.reason),
+          );
+        }),
+      );
+    }
+
     function ApprovalCard({ item, decide, previewGrant, grantState, onViewRules, selected, onSelect }) {
       const state = grantState ?? {};
       const busy = state.loading;
       const generated = Array.isArray(state.rules) ? state.rules : null;
-      const grantBlocked = (item.decision?.segments ?? []).some((segment) => typeof segment === 'string');
+      const allSegments = Array.isArray(item.decision?.segments) ? item.decision.segments : [];
+      const blockedCount = allSegments.filter((segment) => typeof segment === 'string' || segment.verdict !== 'auto-allow').length;
+      const autoAllowCount = allSegments.length - blockedCount;
+      const grantBlocked = allSegments.some((segment) => typeof segment === 'string');
       return h('div', {
         style: selected ? { ...styles.approvalCard, ...styles.approvalCardSelected } : styles.approvalCard,
         onClick: () => onSelect?.(item.id),
@@ -60,6 +88,11 @@ window.__ModuleLoader__.load({
           h('span', { style: styles.time }, item.createdAt ? new Date(item.createdAt).toLocaleString() : ''),
         ),
         h('div', { style: styles.reason }, item.reason),
+        blockedCount > 0 && h('div', { style: styles.segmentSummary },
+          h('div', { style: styles.sectionLabel }, `命令段判定 · ${blockedCount} 段待处理`),
+          h(SegmentList, { decision: item.decision, onlyBlocked: true, compact: true }),
+          autoAllowCount > 0 && h('div', { style: styles.segmentSummaryNote }, `其余 ${autoAllowCount} 段可自动放行`),
+        ),
         state.error && h('div', { style: styles.grantError }, h('strong', null, '规则生成失败：'), h('span', null, state.error), h('div', { style: styles.actions }, h(Button, { onClick: act(() => previewGrant(item)) }, '重试'))),
         generated && generated.length > 0 && h('div', { style: styles.grantResult },
           h('div', { style: styles.grantTitle }, `已生成并锁定 ${generated.length} 条放行规则${state.target === 'global' ? '（全局）' : '（当前工作区）'}`),
@@ -423,8 +456,8 @@ window.__ModuleLoader__.load({
                   h('div', { style: styles.detailLabel }, '判定说明'),
                   h('div', { style: styles.callout }, selectedItem.reason ?? '该命令未命中放行规则，需要人工确认。'),
                   selectedSegments.length > 0 && h('div', null,
-                    h('div', { style: styles.detailLabel }, '未命中的命令段'),
-                    selectedSegments.map((segment, i) => h('div', { key: i, style: styles.segment }, segment.text)),
+                    h('div', { style: styles.detailLabel }, '命令段判定'),
+                    h(SegmentList, { decision: selectedItem.decision, onlyBlocked: false }),
                   ),
                 )
                 : h('div', { style: styles.detailEmpty }, '选择一条待审批命令查看详情。'),
@@ -523,6 +556,17 @@ window.__ModuleLoader__.load({
       callout: { borderLeft: `3px solid ${C.yellowText}`, background: C.yellowBg, color: C.yellowText, padding: '9px 11px', borderRadius: 6, fontSize: 12, lineHeight: 1.5 },
       segmentBox: { marginBottom: 12 },
       segment: { padding: '6px 10px', background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, marginBottom: 6, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12, color: C.text, wordBreak: 'break-word' },
+      segmentSummary: { marginTop: 10, padding: '9px 10px', background: C.panel2, border: `1px dashed ${C.line}`, borderRadius: 8 },
+      segmentSummaryNote: { fontSize: 11, color: C.muted, marginTop: 4 },
+      segmentList: { display: 'grid', gap: 6 },
+      segmentListCompact: { display: 'grid', gap: 5 },
+      segmentRow: { padding: '6px 8px', background: '#ffffff', border: `1px solid ${C.line}`, borderRadius: 6 },
+      segmentHead: { display: 'flex', alignItems: 'flex-start', gap: 8 },
+      segmentText: { flex: 1, minWidth: 0, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 11.5, color: C.text, wordBreak: 'break-word', whiteSpace: 'pre-wrap' },
+      segmentReason: { fontSize: 11, color: C.muted, marginTop: 4 },
+      segmentTagAllow: { flexShrink: 0, fontSize: 10, fontWeight: 700, color: C.green, background: C.greenBg, borderRadius: 999, padding: '1px 7px' },
+      segmentTagPending: { flexShrink: 0, fontSize: 10, fontWeight: 700, color: C.yellowText, background: C.yellowBg, borderRadius: 999, padding: '1px 7px' },
+      segmentTagDeny: { flexShrink: 0, fontSize: 10, fontWeight: 700, color: C.red, background: C.redBg, borderRadius: 999, padding: '1px 7px' },
       errorBox: { padding: 24, margin: 24, border: `1px solid ${C.red}`, borderRadius: 10, background: C.redBg },
       errorPre: { whiteSpace: 'pre-wrap', overflowWrap: 'break-word', fontSize: 12, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
       overlay: { position: 'fixed', inset: 0, background: 'rgba(23, 32, 51, 0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, zIndex: 50 },

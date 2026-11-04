@@ -41,3 +41,16 @@ test('still blocks file redirection', () => {
   assert.equal(result.verdict, 'pending');
   assert.match(result.reason, /重定向/);
 });
+
+test('keeps per-segment verdicts so the UI can explain the blocker', () => {
+  const result = evaluateCommand(
+    "ls aliyun/.terraform/service-contacts.json 2>/dev/null && sed -n '1,60p' aliyun/scripts/read_contact_map.py && echo done",
+    { workspace: process.cwd() },
+  );
+  assert.equal(result.verdict, 'pending');
+  const [lsSegment, sedSegment, echoSegment] = result.segments;
+  assert.equal(lsSegment.verdict, 'auto-allow');
+  assert.equal(sedSegment.verdict, 'pending');
+  assert.match(sedSegment.reason, /没有命中放行规则/);
+  assert.equal(echoSegment.verdict, 'auto-allow');
+});
