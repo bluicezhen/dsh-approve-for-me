@@ -79,6 +79,7 @@ window.__ModuleLoader__.load({
       const blockedCount = allSegments.filter((segment) => typeof segment === 'string' || segment.verdict !== 'auto-allow').length;
       const autoAllowCount = allSegments.length - blockedCount;
       const grantBlocked = allSegments.some((segment) => typeof segment === 'string');
+      const opaqueReason = item.decision?.reason;
       return h('div', {
         style: selected ? { ...styles.approvalCard, ...styles.approvalCardSelected } : styles.approvalCard,
         onClick: () => onSelect?.(item.id),
@@ -103,11 +104,11 @@ window.__ModuleLoader__.load({
           h(Button, { onClick: act(() => decide(item.id, 'allow', 'once')) }, '仅此次'),
           h(Button, { onClick: act(() => decide(item.id, 'allow', 'session')) }, '本会话'),
           grantBlocked
-            ? h(Button, { disabled: true, title: '该命令含有无法静态判定的构造，不能生成长期规则' }, '长期并锁定规则…')
+            ? h(Button, { disabled: true, title: opaqueReason ? `${opaqueReason}，不能生成长期规则` : '该命令含有无法静态判定的构造，不能生成长期规则' }, '长期并锁定规则…')
             : h(Button, { primary: true, onClick: act(() => previewGrant(item)) }, '长期并锁定规则…'),
           h(Button, { danger: true, onClick: act(() => decide(item.id, 'deny', 'once')) }, '拒绝'),
         ),
-        grantBlocked && h('div', { style: styles.opaqueHint }, '该命令包含重定向到文件、命令替换等不可判定构造，无法长期放行；可使用「仅此次」或「本会话」。'),
+        grantBlocked && h('div', { style: styles.opaqueHint }, `${opaqueReason ?? '命令包含无法静态判定的构造'}，无法长期放行；可使用「仅此次」或「本会话」。`),
         busy && h('div', { style: styles.actions }, h(Button, { primary: true, disabled: true }, '正在生成并锁定规则…')),
       );
     }

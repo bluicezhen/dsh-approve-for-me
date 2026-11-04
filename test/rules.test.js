@@ -66,3 +66,14 @@ test('rest args matches arbitrary arguments', () => {
   assert.equal(evaluateSegment('cd /tmp', ['cd', '/tmp'], { rules: [rule] }).verdict, 'auto-allow');
   assert.equal(evaluateSegment('cd', ['cd'], { rules: [rule] }).verdict, 'auto-allow');
 });
+
+test('allows commands that read the exit-code variable', () => {
+  assert.equal(evaluateCommand('echo exit=$?', { workspace: process.cwd() }).verdict, 'auto-allow');
+  assert.equal(evaluateCommand('echo "exit=$?"', { workspace: process.cwd() }).verdict, 'auto-allow');
+});
+
+test('still blocks commands that use other variables', () => {
+  const result = evaluateCommand('echo $HOME', { workspace: process.cwd() });
+  assert.equal(result.verdict, 'pending');
+  assert.match(result.reason, /变量|命令替换/);
+});

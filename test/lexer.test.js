@@ -39,3 +39,16 @@ test('still treats file and input redirections as opaque', () => {
 test('does not strip redirections inside quotes', () => {
   assert.deepEqual(splitCommand('echo "2>&1 >/dev/null"'), { ok: true, segments: ['echo "2>&1 >/dev/null"'] });
 });
+
+test('allows the exit-code variable $?', () => {
+  assert.deepEqual(splitCommand('echo exit=$?'), { ok: true, segments: ['echo exit=$?'] });
+  assert.deepEqual(splitCommand('echo "exit=$?"'), { ok: true, segments: ['echo "exit=$?"'] });
+  assert.deepEqual(splitCommand('echo ${?}'), { ok: true, segments: ['echo ${?}'] });
+});
+
+test('still treats other variables and substitutions as opaque', () => {
+  assert.equal(splitCommand('echo $HOME').ok, false);
+  assert.equal(splitCommand('echo "$HOME"').ok, false);
+  assert.equal(splitCommand('echo $(date)').ok, false);
+  assert.equal(splitCommand('echo `date`').ok, false);
+});
