@@ -185,8 +185,8 @@ window.__ModuleLoader__.load({
             h('div', { style: styles.targetRow },
               h('span', { style: styles.editorLabel }, '写入位置'),
               h('select', { value: preview.target, onChange: (event) => onChangeTarget(event.target.value), style: styles.select },
-                h('option', { value: 'workspace' }, '当前工作区'),
                 h('option', { value: 'global' }, '全局'),
+                h('option', { value: 'workspace' }, '当前工作区'),
               ),
               h('span', { style: styles.targetHint }, preview.target === 'global' ? '全局规则对所有工作区生效' : `仅作用于 ${preview.workspace ?? '当前工作区'}`),
             ),
@@ -290,7 +290,7 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { refresh(); const timer = setInterval(refresh, 500); return () => clearInterval(timer); }, [refresh]);
       const decide = (id, decision, scope) => fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id, decision, scope }) }).then(refresh);
       const previewGrant = (item) => {
-        setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'workspace', rules: [], error: null, saving: false, loading: true });
+        setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'global', rules: [], error: null, saving: false, loading: true });
         return fetch(`${API}/preview`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: item.id }) })
           .then((r) => r.json().then((body) => ({ status: r.status, body })))
           .then(({ status, body }) => {
@@ -299,7 +299,7 @@ window.__ModuleLoader__.load({
                 itemId: item.id,
                 itemCommand: item.command,
                 workspace: body.workspace ?? item.workspace,
-                target: body.defaultTarget === 'global' ? 'global' : 'workspace',
+                target: body.defaultTarget === 'workspace' ? 'workspace' : 'global',
                 rules: (body.rules ?? []).map((rule) => {
                   const editor = ruleArgsToEditor(rule.args);
                   return {
@@ -315,13 +315,13 @@ window.__ModuleLoader__.load({
                 loading: false,
               });
             } else {
-              setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'workspace', rules: [], error: body.error ?? '无法生成规则预览', saving: false, loading: false });
+              setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'global', rules: [], error: body.error ?? '无法生成规则预览', saving: false, loading: false });
             }
           })
-          .catch((err) => setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'workspace', rules: [], error: err.message, saving: false, loading: false }));
+          .catch((err) => setPreview({ itemId: item.id, itemCommand: item.command, workspace: item.workspace, target: 'global', rules: [], error: err.message, saving: false, loading: false }));
       };
       const changePreviewTarget = (target) => {
-        setPreview((prev) => prev ? { ...prev, target: target === 'global' ? 'global' : 'workspace' } : prev);
+        setPreview((prev) => prev ? { ...prev, target: target === 'workspace' ? 'workspace' : 'global' } : prev);
       };
       const changePreviewRule = (index, patch) => {
         setPreview((prev) => prev ? { ...prev, error: null, rules: prev.rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule) } : prev);
@@ -342,7 +342,7 @@ window.__ModuleLoader__.load({
         const itemId = preview.itemId;
         const itemCommand = preview.itemCommand;
         const workspace = preview.workspace;
-        const target = preview.target === 'global' ? 'global' : 'workspace';
+        const target = preview.target === 'workspace' ? 'workspace' : 'global';
         const rules = preview.rules.map((rule, index) => ({
           id: rule.id || `human-${Date.now()}-${index + 1}`,
           effect: rule.effect === 'deny' ? 'deny' : 'allow',

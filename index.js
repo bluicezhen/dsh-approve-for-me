@@ -177,7 +177,7 @@ export async function apply(ctx, config = {}) {
   };
 
   const createPermanentGrant = async (entry, providedRules, requestedTarget) => {
-    const target = requestedTarget === 'global' ? 'global' : 'workspace';
+    const target = requestedTarget === 'workspace' ? 'workspace' : 'global';
     const store = await storeFor(target === 'global' ? undefined : entry.workspace);
     const generatedRules = providedRules === undefined ? draftRulesFor(entry) : normalizeRules(providedRules);
     if (!generatedRules.length) throw new Error(describeDraftError(entry));
@@ -226,7 +226,7 @@ export async function apply(ctx, config = {}) {
           if (!entry) return sendJson(res, 404, { ok: false, error: 'approval-not-found' });
           const rules = draftRulesFor(entry);
           if (!rules.length) return sendJson(res, 400, { ok: false, error: describeDraftError(entry) });
-          return sendJson(res, 200, { ok: true, workspace: entry.workspace, defaultTarget: 'workspace', targets: ['workspace', 'global'], rules });
+          return sendJson(res, 200, { ok: true, workspace: entry.workspace, defaultTarget: 'global', targets: ['global', 'workspace'], rules });
         }
         if (req.method === 'POST' && suffix === '/decision') {
           const body = await readBody(req);
