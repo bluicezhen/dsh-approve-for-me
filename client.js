@@ -158,10 +158,13 @@ window.__ModuleLoader__.load({
 
     function ruleArgsToEditor(args) {
       const list = Array.isArray(args) ? args : [];
-      if (list.length === 1 && list[0]?.kind === 'rest') return { anyArgs: true, args: [] };
+      if (list.length === 1 && list[0]?.kind === 'rest') return { anyArgs: true, trailingAny: false, args: [] };
+      const trailingAny = list.length > 0 && list[list.length - 1]?.kind === 'rest';
+      const literalList = trailingAny ? list.slice(0, -1) : list;
       return {
         anyArgs: false,
-        args: list.map((arg) => typeof arg === 'string'
+        trailingAny,
+        args: literalList.map((arg) => typeof arg === 'string'
           ? arg
           : arg?.kind === 'literal'
             ? arg.value ?? ''
@@ -207,18 +210,23 @@ window.__ModuleLoader__.load({
               h('div', { style: styles.argsRow },
                 h('span', { style: styles.editorLabel }, '参数'),
                 h('label', { style: styles.anyArgsLabel },
-                  h('input', { type: 'checkbox', checked: !!rule.anyArgs, onChange: (event) => onChangeRule(index, { anyArgs: event.target.checked }), style: styles.anyArgsCheckbox }),
+                  h('input', { type: 'checkbox', checked: !!rule.anyArgs, onChange: (event) => onChangeRule(index, event.target.checked ? { anyArgs: true, trailingAny: false } : { anyArgs: false }), style: styles.anyArgsCheckbox }),
                   '任意参数',
+                ),
+                !rule.anyArgs && h('label', { style: styles.anyArgsLabel },
+                  h('input', { type: 'checkbox', checked: !!rule.trailingAny, onChange: (event) => onChangeRule(index, { trailingAny: event.target.checked }), style: styles.anyArgsCheckbox }),
+                  '后续参数任意',
                 ),
                 rule.anyArgs
                   ? h('span', { style: styles.editorEmptyArg }, '匹配该程序的任意参数（包括无参数）')
                   : [
-                    rule.args.length === 0 && h('span', { key: 'empty', style: styles.editorEmptyArg }, '无参数（仅匹配不带参数）'),
+                    rule.args.length === 0 && !rule.trailingAny && h('span', { key: 'empty', style: styles.editorEmptyArg }, '无参数（仅匹配不带参数）'),
                     ...rule.args.map((arg, argIndex) => h('span', { key: argIndex, style: styles.argChip },
                       h('input', { value: arg, placeholder: '参数值', onChange: (event) => { const args = rule.args.slice(); args[argIndex] = event.target.value; onChangeRule(index, { args }); }, style: styles.argInput }),
                       h('button', { type: 'button', style: styles.argRemove, onClick: () => { const args = rule.args.slice(); args.splice(argIndex, 1); onChangeRule(index, { args }); }, 'aria-label': '移除参数' }, '×'),
                     )),
                     h('button', { key: 'add', type: 'button', style: styles.addArg, onClick: () => onChangeRule(index, { args: [...rule.args, ''] }) }, '+ 参数'),
+                    rule.trailingAny && h('span', { key: 'rest', style: styles.restChip }, '后续参数任意'),
                   ],
               ),
               h('div', { style: styles.editorScope }, '作用域：长期（human）'),
@@ -308,6 +316,7 @@ window.__ModuleLoader__.load({
                     effect: rule.effect === 'deny' ? 'deny' : 'allow',
                     program: rule.program ?? '',
                     anyArgs: editor.anyArgs,
+                    trailingAny: editor.trailingAny,
                     args: editor.args,
                   };
                 }),
@@ -328,7 +337,7 @@ window.__ModuleLoader__.load({
         setPreview((prev) => prev ? { ...prev, error: null, rules: prev.rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule) } : prev);
       };
       const addPreviewRule = () => {
-        setPreview((prev) => prev ? { ...prev, error: null, rules: [...prev.rules, { id: `human-${Date.now()}-${prev.rules.length + 1}`, effect: 'allow', program: '', anyArgs: false, args: [] }] } : prev);
+        setPreview((prev) => prev ? { ...prev, error: null, rules: [...prev.rules, { id: `human-${Date.now()}-${prev.rules.length + 1}`, effect: 'allow', program: '', anyArgs: false, trailingAny: false, args: [] }] } : prev);
       };
       const removePreviewRule = (index) => {
         setPreview((prev) => prev ? { ...prev, rules: prev.rules.filter((_, i) => i !== index) } : prev);
@@ -348,7 +357,12 @@ window.__ModuleLoader__.load({
           id: rule.id || `human-${Date.now()}-${index + 1}`,
           effect: rule.effect === 'deny' ? 'deny' : 'allow',
           program: rule.program.trim(),
-          args: rule.anyArgs ? [{ kind: 'rest' }] : rule.args.map((value) => ({ kind: 'literal', value })),
+          args: rule.anyArgs
+            ? [{ kind: 'rest' }]
+            : [
+              ...rule.args.map((value) => ({ kind: 'literal', value })),
+              ...(rule.trailingAny ? [{ kind: 'rest' }] : []),
+            ],
         }));
         setPreview((prev) => prev ? { ...prev, saving: true, error: null } : prev);
         return fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: itemId, decision: 'allow', scope: 'permanent', rules, target }) })
@@ -632,6 +646,7 @@ window.__ModuleLoader__.load({
       argInput: { border: 0, outline: 'none', background: 'transparent', color: C.text, fontSize: 12, padding: '6px 8px', width: 110, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
       argRemove: { border: 0, borderLeft: `1px solid ${C.line}`, background: 'transparent', color: C.muted, cursor: 'pointer', fontSize: 14, padding: '2px 7px' },
       addArg: { border: `1px dashed ${C.line}`, borderRadius: 7, background: '#ffffff', color: C.accent, fontSize: 12, cursor: 'pointer', padding: '5px 9px' },
+      restChip: { display: 'inline-flex', alignItems: 'center', border: `1px dashed ${C.accent}`, borderRadius: 7, background: '#f2f6ff', color: C.accent, fontSize: 11, padding: '5px 8px' },
       addRuleButton: { width: '100%', border: `1px dashed ${C.line}`, borderRadius: 8, background: '#ffffff', color: C.accent, fontSize: 12, cursor: 'pointer', padding: '8px 10px', marginTop: 2 },
       editorScope: { marginTop: 9, fontSize: 11, color: C.muted },
       dialogFoot: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '14px 20px', borderTop: `1px solid ${C.line}`, background: C.panel },

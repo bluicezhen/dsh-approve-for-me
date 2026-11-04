@@ -67,6 +67,19 @@ test('rest args matches arbitrary arguments', () => {
   assert.equal(evaluateSegment('cd', ['cd'], { rules: [rule] }).verdict, 'auto-allow');
 });
 
+test('literal prefix plus rest matches only that prefix', () => {
+  const rule = {
+    id: 'python-unittest',
+    effect: 'allow',
+    program: '.venv-alerts/bin/python',
+    args: [{ kind: 'literal', value: '-m' }, { kind: 'literal', value: 'unittest' }, { kind: 'rest' }],
+  };
+  const argv = (rest) => ['.venv-alerts/bin/python', '-m', 'unittest', ...rest];
+  assert.equal(evaluateSegment(argv(['aliyun.tests.test_a', '-v']).join(' '), argv(['aliyun.tests.test_a', '-v']), { rules: [rule] }).verdict, 'auto-allow');
+  assert.equal(evaluateSegment(argv([]).join(' '), argv([]), { rules: [rule] }).verdict, 'auto-allow');
+  assert.notEqual(evaluateSegment('x', ['.venv-alerts/bin/python', '-m', 'pytest'], { rules: [rule] }).verdict, 'auto-allow');
+});
+
 test('allows commands that read the exit-code variable', () => {
   assert.equal(evaluateCommand('echo exit=$?', { workspace: process.cwd() }).verdict, 'auto-allow');
   assert.equal(evaluateCommand('echo "exit=$?"', { workspace: process.cwd() }).verdict, 'auto-allow');
