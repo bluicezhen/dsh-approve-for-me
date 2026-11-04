@@ -6,8 +6,25 @@ window.__ModuleLoader__.load({
     const PANEL = 'approve-for-me';
     const API = '/api/approve-for-me';
 
-    function Button({ children, onClick, disabled, primary }) {
-      return h('button', { type: 'button', disabled, onClick, style: primary ? styles.buttonPrimary : styles.button }, children);
+    const C = {
+      bg: '#f4f7fb',
+      panel: '#ffffff',
+      panel2: '#f7f9fc',
+      line: '#dce3ee',
+      text: '#172033',
+      muted: '#6e7b8f',
+      accent: '#3d6fca',
+      green: '#218653',
+      greenBg: '#e2f5e9',
+      red: '#c94b58',
+      redBg: '#ffe8eb',
+      yellowText: '#795317',
+      yellowBg: '#fff8e7',
+    };
+
+    function Button({ children, onClick, disabled, primary, danger }) {
+      const base = danger ? styles.buttonDanger : primary ? styles.buttonPrimary : styles.button;
+      return h('button', { type: 'button', disabled, onClick, style: disabled ? { ...base, opacity: 0.6, cursor: 'default' } : base }, children);
     }
 
     function Badge({ children, kind }) {
@@ -27,33 +44,32 @@ window.__ModuleLoader__.load({
       );
     }
 
-    function ApprovalCard({ item, decide, grant, grantState, onViewRules }) {
+    const act = (fn) => (event) => { event.stopPropagation(); fn(); };
+
+    function ApprovalCard({ item, decide, grant, grantState, onViewRules, selected, onSelect }) {
       const state = grantState ?? {};
       const busy = state.loading;
       const generated = Array.isArray(state.rules) ? state.rules : null;
-      return h(Card, {
-        title: '待审批命令',
-        sub: item.createdAt ? new Date(item.createdAt).toLocaleString() : '',
+      return h('div', {
+        style: selected ? { ...styles.approvalCard, ...styles.approvalCardSelected } : styles.approvalCard,
+        onClick: () => onSelect?.(item.id),
       },
-        h('code', { style: styles.command }, item.command),
-        h('p', { style: styles.reason }, item.reason),
-        h('div', { style: styles.segmentBox },
-          h('div', { style: styles.sectionLabel }, '未命中的命令段'),
-          (item.decision?.segments ?? []).filter((s) => s.verdict !== 'auto-allow').length === 0
-            ? h('span', { style: styles.muted }, '整段命令需人审批')
-            : (item.decision?.segments ?? []).filter((s) => s.verdict !== 'auto-allow').map((s, i) => h('div', { key: i, style: styles.segment }, `${s.text}`)),
+        h('div', { style: styles.approvalTop },
+          h('code', { style: styles.command }, item.command),
+          h('span', { style: styles.time }, item.createdAt ? new Date(item.createdAt).toLocaleString() : ''),
         ),
-        state.error && h('div', { style: styles.grantError }, h('strong', null, '规则生成失败：'), h('span', null, state.error), h('div', { style: styles.actions }, h(Button, { onClick: () => grant(item) }, '重试'))),
+        h('div', { style: styles.reason }, item.reason),
+        state.error && h('div', { style: styles.grantError }, h('strong', null, '规则生成失败：'), h('span', null, state.error), h('div', { style: styles.actions }, h(Button, { onClick: act(() => grant(item)) }, '重试'))),
         generated && generated.length > 0 && h('div', { style: styles.grantResult },
           h('div', { style: styles.grantTitle }, `已生成并锁定 ${generated.length} 条放行规则`),
           generated.map((rule, i) => h(RuleRow, { key: rule.id ?? i, rule, index: i, compact: true })),
-          h('div', { style: styles.actions }, h(Button, { primary: true, onClick: () => onViewRules(generated) }, '在规则页查看')),
+          h('div', { style: styles.actions }, h(Button, { primary: true, onClick: act(() => onViewRules(generated)) }, '在规则列表查看')),
         ),
         !generated && !busy && h('div', { style: styles.actions },
-          h(Button, { onClick: () => decide(item.id, 'allow', 'once') }, '仅此次'),
-          h(Button, { onClick: () => decide(item.id, 'allow', 'session') }, '本会话'),
-          h(Button, { primary: true, onClick: () => grant(item) }, '长期并锁定规则'),
-          h(Button, { onClick: () => decide(item.id, 'deny', 'once') }, '拒绝'),
+          h(Button, { onClick: act(() => decide(item.id, 'allow', 'once')) }, '仅此次'),
+          h(Button, { onClick: act(() => decide(item.id, 'allow', 'session')) }, '本会话'),
+          h(Button, { primary: true, onClick: act(() => grant(item)) }, '长期并锁定规则'),
+          h(Button, { danger: true, onClick: act(() => decide(item.id, 'deny', 'once')) }, '拒绝'),
         ),
         busy && h('div', { style: styles.actions }, h(Button, { primary: true, disabled: true }, '正在生成并锁定规则…')),
       );
@@ -91,7 +107,6 @@ window.__ModuleLoader__.load({
     }
 
     function Page() {
-      const [tab, setTab] = React.useState('approvals');
       const [state, setState] = React.useState({ queue: { pending: [], history: [] }, stores: [] });
       const [error, setError] = React.useState(null);
       React.useEffect(() => {
@@ -102,6 +117,8 @@ window.__ModuleLoader__.load({
       const [confirming, setConfirming] = React.useState(false);
       const [grants, setGrants] = React.useState({});
       const [focusRuleIds, setFocusRuleIds] = React.useState([]);
+      const [selectedId, setSelectedId] = React.useState(null);
+      const rulesRef = React.useRef(null);
       const refresh = React.useCallback(() => fetch(`${API}/state`).then((r) => r.json()).then((next) => {
         const safe = {
           queue: { pending: Array.isArray(next?.queue?.pending) ? next.queue.pending : [], history: Array.isArray(next?.queue?.history) ? next.queue.history : [] },
@@ -125,10 +142,11 @@ window.__ModuleLoader__.load({
           .catch((err) => setGrants((prev) => ({ ...prev, [item.id]: { loading: false, command: item.command, error: err.message } })))
           .then(refresh);
       };
+      const goRules = () => rulesRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
       const viewRules = (rules) => {
         setFocusRuleIds((rules ?? []).map((rule) => rule.id));
         setRuleQuery('');
-        setTab('rules');
+        goRules();
       };
       const confirmRules = (workspace) => {
         setConfirming(true);
@@ -136,126 +154,191 @@ window.__ModuleLoader__.load({
       };
       if (error) return h('div', { style: styles.page }, h('div', { style: styles.errorBox }, h('h2', null, '界面渲染错误'), h('pre', { style: styles.errorPre }, error), h(Button, { onClick: () => { setError(null); refresh(); } }, '重试')));
       const unconfirmedStores = state.stores.filter((store) => !store.confirmed);
+      const pending = state.queue.pending;
+      const selectedItem = pending.find((item) => item.id === selectedId) ?? pending[0] ?? null;
+      const selectedSegments = (selectedItem?.decision?.segments ?? []).filter((s) => s.verdict !== 'auto-allow');
+      const generatedGrants = Object.keys(grants).filter((id) => Array.isArray(grants[id].rules) && grants[id].rules.length > 0);
       return h('div', { style: styles.page },
         h('header', { style: styles.header },
-          h('h1', { style: styles.title }, '命令审批'),
-          state.queue.pending.length > 0 && h(Badge, { kind: 'error' }, String(state.queue.pending.length)),
+          h('div', null,
+            h('div', { style: styles.eyebrow }, 'COMMAND GATE'),
+            h('h1', { style: styles.title }, '命令审批'),
+          ),
+          pending.length > 0 ? h(Badge, { kind: 'error' }, `${pending.length} 条待审批`) : h('span', { style: styles.headerHint }, '暂无待审批'),
         ),
         unconfirmedStores.length > 0 && h('div', { style: styles.banner },
           h('div', { style: styles.bannerText },
             h('strong', null, '有规则尚未确认，自动放行已暂停。'),
             h('span', null, '确认规则后，只有命中放行规则的命令才会自动执行；其余命令仍需人工审批。'),
           ),
-          h(Button, { primary: true, disabled: confirming, onClick: () => setTab('rules') }, '去确认规则'),
+          h(Button, { primary: true, disabled: confirming, onClick: goRules }, '去确认规则'),
         ),
-        h('nav', { style: styles.tabs },
-          h('button', { style: tab === 'approvals' ? styles.activeTab : styles.tab, onClick: () => setTab('approvals') }, '审批'),
-          h('button', { style: tab === 'rules' ? styles.activeTab : styles.tab, onClick: () => setTab('rules') }, '规则'),
-        ),
-        tab === 'approvals' ? h('div', { style: styles.scrollBody },
-          state.queue.pending.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '当前没有待审批命令。')) : state.queue.pending.map((item) => h(ApprovalCard, { key: item.id, item, decide, grant, grantState: grants[item.id], onViewRules: viewRules })),
-          Object.keys(grants).filter((id) => Array.isArray(grants[id].rules) && grants[id].rules.length > 0).length > 0 && h('div', { style: styles.section },
-            h('div', { style: styles.sectionHeading }, h('div', null, h('div', { style: styles.sectionTitle }, '刚刚生成并锁定的规则'), h('div', { style: styles.sectionSubtitle }, '这些规则已保存并确认，立即生效'))),
-            h('div', { style: styles.historyList }, Object.keys(grants).filter((id) => Array.isArray(grants[id].rules) && grants[id].rules.length > 0).map((id) => {
-              const entry = grants[id];
-              return h('div', { key: `grant-${id}`, style: styles.grantResult },
-                entry.command && h('code', { style: styles.historyCommand }, entry.command),
-                h('div', { style: styles.grantTitle }, `已生成并锁定 ${entry.rules.length} 条放行规则`),
-                entry.rules.map((rule, i) => h(RuleRow, { key: rule.id ?? i, rule, index: i, compact: true })),
-                h('div', { style: styles.actions }, h(Button, { primary: true, onClick: () => viewRules(entry.rules) }, '在规则页查看')),
-              );
-            }),
-          )),
-          state.queue.history.length > 0 && h('div', { style: styles.section },
-            h('div', { style: styles.sectionHeading },
-              h('div', null, h('div', { style: styles.sectionTitle }, '历史'), h('div', { style: styles.sectionSubtitle }, '最近 100 条审批记录')),
-              h(Badge, null, String(state.queue.history.length)),
-            ),
-            h('div', { style: styles.historyList }, state.queue.history.map((item) => h(HistoryCard, { key: item.id, item }))),
-          ),
-        ) : h('div', { style: styles.scrollBody },
-          h('div', { style: styles.sectionHeading },
-            h('div', null, h('div', { style: styles.sectionTitle }, '规则库'), h('div', { style: styles.sectionSubtitle }, '只读展示当前生效的全局与工作区规则')),
-            h('input', { value: ruleQuery, onChange: (event) => setRuleQuery(event.target.value), placeholder: '搜索规则 ID、程序或参数', style: styles.searchInput }),
-          ),
-          state.stores.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '尚未加载规则库。')) : state.stores.map((store) => {
-            const query = ruleQuery.trim().toLowerCase();
-            const rules = store.rules.filter((rule) => !query || JSON.stringify(rule).toLowerCase().includes(query));
-            return h(Card, {
-              key: `${store.workspace ?? 'global'}-${store.rulesDigest}`,
-              title: store.workspace ? `工作区规则` : '全局规则',
-              sub: `${rules.length}/${store.rules.length} 条 · ${store.confirmed ? '已确认' : '待确认'}${store.workspace ? ` · ${store.workspace}` : ''}`,
-              actions: !store.confirmed && h(Button, { primary: true, disabled: confirming, onClick: () => confirmRules(store.workspace) }, confirming ? '确认中…' : '确认规则'),
-            },
-              rules.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '没有匹配的规则。')) : h('div', { style: styles.rulesList }, rules.map((rule, index) => h(RuleRow, { key: rule.id ?? index, rule, index, highlight: focusRuleIds.includes(rule.id) }))),
-              (store.added.length > 0 || store.removed.length > 0 || store.modified.length > 0) && h('div', { style: styles.changeBox },
-                h('div', { style: styles.sectionLabel }, '待确认变更'),
-                store.added.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `新增 ${store.added.length} 条`), store.added.map((rule, i) => h(RuleRow, { key: `added-${rule.id ?? i}`, rule, index: i }))),
-                store.removed.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `删除 ${store.removed.length} 条`), store.removed.map((rule, i) => h(RuleRow, { key: `removed-${rule.id ?? i}`, rule, index: i }))),
-                store.modified.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `修改 ${store.modified.length} 条`), store.modified.map((rule, i) => h(RuleRow, { key: `modified-${rule.id ?? i}`, rule, index: i }))),
+        h('div', { style: styles.workspace },
+          h('section', { style: styles.column },
+            h('div', { style: styles.panelHead },
+              h('div', null,
+                h('div', { style: styles.panelTitle }, '审批队列'),
+                h('div', { style: styles.panelMeta }, '命令执行前的人工决策'),
               ),
-            );
-          }),
+              pending.length > 0 && h(Badge, { kind: 'error' }, String(pending.length)),
+            ),
+            h('div', { style: styles.columnBody },
+              h('div', { style: styles.group },
+                h('div', { style: styles.groupHead },
+                  h('span', { style: styles.groupTitle }, '待审批'),
+                  pending.length > 0 && h('span', { style: styles.groupMeta }, `${pending.length} 条`),
+                ),
+                pending.length === 0
+                  ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '当前没有待审批命令。'))
+                  : pending.map((item) => h(ApprovalCard, { key: item.id, item, decide, grant, grantState: grants[item.id], onViewRules: viewRules, selected: selectedItem?.id === item.id, onSelect: setSelectedId })),
+              ),
+              h('div', { style: styles.group },
+                h('div', { style: styles.groupHead },
+                  h('span', { style: styles.groupTitle }, '已审批'),
+                  h('span', { style: styles.groupMeta }, '最近 100 条'),
+                ),
+                state.queue.history.length === 0
+                  ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '暂无审批记录。'))
+                  : h('div', { style: styles.historyList }, state.queue.history.map((item) => h(HistoryCard, { key: item.id, item }))),
+              ),
+              generatedGrants.length > 0 && h('div', { style: styles.section },
+                h('div', { style: styles.sectionHeading }, h('div', null, h('div', { style: styles.sectionTitle }, '刚刚生成并锁定的规则'), h('div', { style: styles.sectionSubtitle }, '这些规则已保存并确认，立即生效'))),
+                h('div', { style: styles.historyList }, generatedGrants.map((id) => {
+                  const entry = grants[id];
+                  return h('div', { key: `grant-${id}`, style: styles.grantResult },
+                    entry.command && h('code', { style: styles.historyCommand }, entry.command),
+                    h('div', { style: styles.grantTitle }, `已生成并锁定 ${entry.rules.length} 条放行规则`),
+                    entry.rules.map((rule, i) => h(RuleRow, { key: rule.id ?? i, rule, index: i, compact: true })),
+                    h('div', { style: styles.actions }, h(Button, { primary: true, onClick: () => viewRules(entry.rules) }, '在规则列表查看')),
+                  );
+                })),
+              ),
+            ),
+          ),
+          h('aside', { style: styles.column, ref: rulesRef },
+            h('div', { style: styles.panelHead },
+              h('div', null,
+                h('div', { style: styles.panelTitle }, '规则列表'),
+                h('div', { style: styles.panelMeta }, '已确认规则 · 全局与工作区'),
+              ),
+              h('input', { value: ruleQuery, onChange: (event) => setRuleQuery(event.target.value), placeholder: '搜索规则', style: styles.searchInput }),
+            ),
+            h('div', { style: styles.rulesScroll },
+              state.stores.length === 0
+                ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '尚未加载规则库。'))
+                : state.stores.map((store) => {
+                  const query = ruleQuery.trim().toLowerCase();
+                  const rules = store.rules.filter((rule) => !query || JSON.stringify(rule).toLowerCase().includes(query));
+                  return h(Card, {
+                    key: `${store.workspace ?? 'global'}-${store.rulesDigest}`,
+                    title: store.workspace ? '工作区规则' : '全局规则',
+                    sub: `${rules.length}/${store.rules.length} 条 · ${store.confirmed ? '已确认' : '待确认'}${store.workspace ? ` · ${store.workspace}` : ''}`,
+                    actions: !store.confirmed && h(Button, { primary: true, disabled: confirming, onClick: () => confirmRules(store.workspace) }, confirming ? '确认中…' : '确认规则'),
+                  },
+                    rules.length === 0 ? h('div', { style: styles.emptyPanel }, h('p', { style: styles.muted }, '没有匹配的规则。')) : h('div', { style: styles.rulesList }, rules.map((rule, index) => h(RuleRow, { key: rule.id ?? index, rule, index, highlight: focusRuleIds.includes(rule.id) }))),
+                    (store.added.length > 0 || store.removed.length > 0 || store.modified.length > 0) && h('div', { style: styles.changeBox },
+                      h('div', { style: styles.sectionLabel }, '待确认变更'),
+                      store.added.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `新增 ${store.added.length} 条`), store.added.map((rule, i) => h(RuleRow, { key: `added-${rule.id ?? i}`, rule, index: i }))),
+                      store.removed.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `删除 ${store.removed.length} 条`), store.removed.map((rule, i) => h(RuleRow, { key: `removed-${rule.id ?? i}`, rule, index: i }))),
+                      store.modified.length > 0 && h('div', null, h('div', { style: styles.changeTitle }, `修改 ${store.modified.length} 条`), store.modified.map((rule, i) => h(RuleRow, { key: `modified-${rule.id ?? i}`, rule, index: i }))),
+                    ),
+                  );
+                }),
+            ),
+            h('div', { style: styles.detail },
+              selectedItem
+                ? h('div', null,
+                  h('div', { style: styles.detailLabel }, '当前选中命令'),
+                  h('code', { style: styles.detailCommand }, selectedItem.command),
+                  h('div', { style: styles.detailLabel }, '判定说明'),
+                  h('div', { style: styles.callout }, selectedItem.reason ?? '该命令未命中放行规则，需要人工确认。'),
+                  selectedSegments.length > 0 && h('div', null,
+                    h('div', { style: styles.detailLabel }, '未命中的命令段'),
+                    selectedSegments.map((segment, i) => h('div', { key: i, style: styles.segment }, segment.text)),
+                  ),
+                )
+                : h('div', { style: styles.detailEmpty }, '选择一条待审批命令查看详情。'),
+            ),
+          ),
         ),
       );
     }
 
     const styles = {
-      page: { display: 'flex', flexDirection: 'column', height: '100vh', maxWidth: 1100, margin: '0 auto', fontFamily: 'var(--dsw-alias-mono-font-family, system-ui, -apple-system, sans-serif)', color: 'var(--dsw-alias-label-primary)' },
-      header: { display: 'flex', alignItems: 'center', gap: 12, padding: '20px 24px 12px', flexShrink: 0 },
-      title: { margin: 0, fontSize: 24, fontWeight: 700 },
-      badge: { borderRadius: 999, padding: '2px 10px', background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-secondary)', fontSize: 13, fontWeight: 600 },
-      badgeError: { borderRadius: 999, padding: '2px 10px', background: 'var(--dsw-alias-state-error-primary)', color: '#fff', fontSize: 13, fontWeight: 600 },
-      badgeSuccess: { borderRadius: 999, padding: '2px 10px', background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 16%, transparent)', color: 'var(--dsw-alias-state-success-primary)', fontSize: 13, fontWeight: 600 },
-      tabs: { display: 'flex', gap: 8, borderBottom: '1px solid var(--dsw-alias-border-l2)', margin: '0 24px', flexShrink: 0 },
-      tab: { border: 0, background: 'transparent', padding: '12px 16px', cursor: 'pointer', color: 'var(--dsw-alias-label-secondary)', fontSize: 14 },
-      activeTab: { border: 0, borderBottom: '2px solid var(--dsw-alias-brand-primary)', background: 'transparent', padding: '12px 16px', cursor: 'pointer', color: 'var(--dsw-alias-label-primary)', fontSize: 14, fontWeight: 600 },
-      scrollBody: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 24px 40px', scrollbarWidth: 'thin' },
-      card: { background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 10, marginBottom: 14, padding: '14px 16px' },
-      cardHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 12 },
-      cardTitle: { fontWeight: 600, fontSize: 15, color: 'var(--dsw-alias-label-primary)' },
-      cardSub: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, marginTop: 3 },
-      command: { display: 'block', whiteSpace: 'pre-wrap', marginBottom: 12, padding: 10, borderRadius: 6, background: 'var(--dsw-alias-bg-layer-2)', color: 'var(--dsw-alias-label-primary)', overflow: 'auto', fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 13 },
-      reason: { margin: '0 0 12px', color: 'var(--dsw-alias-label-primary)', fontSize: 14 },
-      sectionLabel: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11, fontWeight: 600, letterSpacing: '0.02em', marginBottom: 6 },
-      segmentBox: { marginBottom: 12 },
-      segment: { padding: '6px 10px', background: 'var(--dsw-alias-bg-layer-2)', borderRadius: 6, marginBottom: 6, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12 },
-      actions: { display: 'flex', gap: 8, flexWrap: 'wrap' },
-      button: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 999, padding: '6px 12px', cursor: 'pointer', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-primary)', fontFamily: 'inherit', fontSize: 12, transition: 'border-color 0.2s ease' },
-      buttonPrimary: { border: '1px solid var(--dsw-alias-brand-primary)', borderRadius: 999, padding: '6px 12px', cursor: 'pointer', background: 'color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, transparent)', color: 'var(--dsw-alias-brand-primary)', fontFamily: 'inherit', fontSize: 12, fontWeight: 600, transition: 'border-color 0.2s ease' },
-      section: { marginTop: 24 },
+      page: { display: 'flex', flexDirection: 'column', height: '100vh', boxSizing: 'border-box', color: C.text, background: C.bg, colorScheme: 'light', fontFamily: 'var(--dsw-alias-mono-font-family, system-ui, -apple-system, sans-serif)' },
+      header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, padding: '20px 28px 12px', flexShrink: 0 },
+      eyebrow: { color: C.accent, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em' },
+      title: { margin: '4px 0 0', fontSize: 24, fontWeight: 700, color: C.text },
+      headerHint: { color: C.muted, fontSize: 13 },
+      badge: { borderRadius: 999, padding: '2px 10px', background: '#e7efff', color: '#315ca5', fontSize: 13, fontWeight: 600 },
+      badgeError: { borderRadius: 999, padding: '2px 10px', background: C.redBg, color: C.red, fontSize: 13, fontWeight: 600 },
+      badgeSuccess: { borderRadius: 999, padding: '2px 10px', background: C.greenBg, color: C.green, fontSize: 13, fontWeight: 600 },
+      banner: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', margin: '0 24px 12px', padding: '10px 14px', borderRadius: 8, border: `1px solid #ecd9ae`, background: C.yellowBg },
+      bannerText: { display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, color: C.text },
+      workspace: { flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(340px, 0.65fr)', gap: 18, padding: '0 24px 20px' },
+      column: { display: 'flex', flexDirection: 'column', minHeight: 0, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 14, overflow: 'hidden' },
+      panelHead: { padding: '16px 18px', borderBottom: `1px solid ${C.line}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexShrink: 0 },
+      panelTitle: { fontWeight: 700, fontSize: 15, color: C.text },
+      panelMeta: { fontSize: 12, color: C.muted, marginTop: 3 },
+      columnBody: { flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, scrollbarWidth: 'thin' },
+      group: { marginBottom: 22 },
+      groupHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 2px 9px' },
+      groupTitle: { fontSize: 12, color: C.muted, fontWeight: 700, letterSpacing: '0.03em' },
+      groupMeta: { fontSize: 11, color: C.muted },
+      approvalCard: { background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 10, padding: '12px 14px', marginBottom: 9, cursor: 'pointer', transition: 'border-color 0.15s ease, box-shadow 0.15s ease' },
+      approvalCardSelected: { borderColor: '#6f9ce9', boxShadow: '0 0 0 2px rgba(61, 111, 202, 0.18)' },
+      approvalTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14 },
+      command: { fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 13, color: C.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+      reason: { fontSize: 12, color: C.muted, margin: '7px 0 0', lineHeight: 1.5 },
+      time: { whiteSpace: 'nowrap', color: C.muted, fontSize: 11, flexShrink: 0 },
+      actions: { display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 12 },
+      button: { border: `1px solid ${C.line}`, borderRadius: 8, padding: '6px 10px', cursor: 'pointer', background: '#ffffff', color: '#24344f', fontFamily: 'inherit', fontSize: 12 },
+      buttonPrimary: { border: `1px solid ${C.accent}`, borderRadius: 8, padding: '6px 10px', cursor: 'pointer', background: C.accent, color: '#ffffff', fontFamily: 'inherit', fontSize: 12, fontWeight: 600 },
+      buttonDanger: { border: '1px solid #e6aab2', borderRadius: 8, padding: '6px 10px', cursor: 'pointer', background: '#fff4f5', color: '#b33f4b', fontFamily: 'inherit', fontSize: 12 },
+      section: { marginTop: 22 },
       sectionHeading: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 10 },
-      sectionTitle: { margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' },
-      sectionSubtitle: { margin: '4px 0 0 0', color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
+      sectionTitle: { margin: 0, fontSize: 15, fontWeight: 600, color: C.text },
+      sectionSubtitle: { margin: '4px 0 0 0', color: C.muted, fontSize: 12 },
+      sectionLabel: { color: C.muted, fontSize: 11, fontWeight: 600, letterSpacing: '0.02em', marginBottom: 6 },
       historyList: { display: 'grid', gap: 8 },
-      historyRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', background: 'var(--dsw-alias-bg-layer-1)', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6 },
-      historyCommand: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12 },
-      searchInput: { minWidth: 220, maxWidth: 320, flex: 1, padding: '6px 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 999, fontFamily: 'inherit', fontSize: 13, color: 'var(--dsw-alias-label-primary)', background: 'var(--dsw-alias-bg-layer-1)' },
+      historyRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8 },
+      historyCommand: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12, color: C.text },
+      card: { background: C.panel, border: `1px solid ${C.line}`, borderRadius: 10, marginBottom: 14, padding: '14px 16px' },
+      cardHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, marginBottom: 12 },
+      cardTitle: { fontWeight: 600, fontSize: 14, color: C.text },
+      cardSub: { color: C.muted, fontSize: 12, marginTop: 3 },
+      searchInput: { width: 140, padding: '7px 10px', border: `1px solid ${C.line}`, borderRadius: 8, fontFamily: 'inherit', fontSize: 12, color: C.text, background: '#ffffff', outline: 'none' },
+      rulesScroll: { flex: 1, minHeight: 0, overflowY: 'auto', padding: 16, scrollbarWidth: 'thin' },
       rulesList: { display: 'grid', gap: 8 },
-      ruleRow: { border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 6, padding: 10, background: 'var(--dsw-alias-bg-layer-2)', display: 'flex', gap: 10, alignItems: 'flex-start' },
-      ruleRowHighlight: { borderColor: 'var(--dsw-alias-brand-primary)', boxShadow: '0 0 0 2px color-mix(in srgb, var(--dsw-alias-brand-primary) 30%, transparent)' },
-      newTag: { color: 'var(--dsw-alias-brand-primary)', border: '1px solid var(--dsw-alias-brand-primary)', borderRadius: 999, padding: '0 6px', fontSize: 10, fontWeight: 700 },
-      ruleIndex: { width: 26, height: 26, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--dsw-alias-bg-layer-1)', color: 'var(--dsw-alias-label-secondary)', fontSize: 11, fontWeight: 700, flexShrink: 0 },
+      ruleRow: { border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, background: C.panel2, display: 'flex', gap: 10, alignItems: 'flex-start' },
+      ruleRowHighlight: { borderColor: C.accent, boxShadow: '0 0 0 2px rgba(61, 111, 202, 0.22)' },
+      newTag: { color: C.accent, border: `1px solid ${C.accent}`, borderRadius: 999, padding: '0 6px', fontSize: 10, fontWeight: 700 },
+      ruleIndex: { width: 26, height: 26, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#ffffff', color: C.muted, fontSize: 11, fontWeight: 700, flexShrink: 0 },
       ruleBody: { flex: 1, minWidth: 0 },
       ruleHeader: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 },
-      ruleId: { fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 13 },
-      ruleDetails: { display: 'flex', flexWrap: 'wrap', gap: 12, color: 'var(--dsw-alias-label-secondary)', fontSize: 12 },
-      allowTag: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 12, fontWeight: 600 },
-      denyTag: { color: 'var(--dsw-alias-state-error-primary)', fontSize: 12, fontWeight: 600 },
-      muted: { color: 'var(--dsw-alias-label-secondary)', fontSize: 13 },
-      emptyPanel: { padding: '24px 0', textAlign: 'center' },
-      changeBox: { marginTop: 14, padding: 12, border: '1px dashed var(--dsw-alias-border-l2)', borderRadius: 6, background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 6%, transparent)' },
-      changeTitle: { color: 'var(--dsw-alias-label-secondary)', fontSize: 12, fontWeight: 600, margin: '8px 0 6px' },
-      grantResult: { marginTop: 12, padding: 12, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-success-primary) 45%, transparent)', borderRadius: 6, background: 'color-mix(in srgb, var(--dsw-alias-state-success-primary) 8%, transparent)' },
-      grantTitle: { color: 'var(--dsw-alias-state-success-primary)', fontSize: 12, fontWeight: 700, marginBottom: 8 },
-      grantError: { marginTop: 12, padding: 12, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, transparent)', borderRadius: 6, background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)', fontSize: 13 },
-      errorBox: { padding: 24, margin: 24, border: '1px solid var(--dsw-alias-state-error-primary)', borderRadius: 10, background: 'color-mix(in srgb, var(--dsw-alias-state-error-primary) 8%, transparent)' },
+      ruleId: { fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12, color: '#344660' },
+      ruleDetails: { display: 'flex', flexWrap: 'wrap', gap: 12, color: C.muted, fontSize: 12 },
+      allowTag: { color: C.green, fontSize: 12, fontWeight: 600 },
+      denyTag: { color: C.red, fontSize: 12, fontWeight: 600 },
+      muted: { color: C.muted, fontSize: 13 },
+      emptyPanel: { padding: '20px 0', textAlign: 'center' },
+      changeBox: { marginTop: 14, padding: 12, border: '1px dashed #e2cc9b', borderRadius: 8, background: C.yellowBg },
+      changeTitle: { color: C.yellowText, fontSize: 12, fontWeight: 600, margin: '8px 0 6px' },
+      grantResult: { marginTop: 12, padding: 12, border: '1px solid #b8e0ca', borderRadius: 8, background: C.greenBg },
+      grantTitle: { color: C.green, fontSize: 12, fontWeight: 700, marginBottom: 8 },
+      grantError: { marginTop: 12, padding: 12, border: '1px solid #ecc0c5', borderRadius: 8, background: C.redBg, fontSize: 13, color: C.text },
+      detail: { borderTop: `1px solid ${C.line}`, padding: '14px 18px', maxHeight: '42%', overflowY: 'auto', flexShrink: 0, scrollbarWidth: 'thin' },
+      detailLabel: { color: C.muted, fontSize: 11, fontWeight: 600, margin: '14px 0 7px' },
+      detailCommand: { display: 'block', fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12.5, background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 8, padding: 10, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: C.text },
+      detailEmpty: { color: C.muted, padding: '10px 2px', fontSize: 12 },
+      callout: { borderLeft: `3px solid ${C.yellowText}`, background: C.yellowBg, color: C.yellowText, padding: '9px 11px', borderRadius: 6, fontSize: 12, lineHeight: 1.5 },
+      segmentBox: { marginBottom: 12 },
+      segment: { padding: '6px 10px', background: C.panel2, border: `1px solid ${C.line}`, borderRadius: 6, marginBottom: 6, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 12, color: C.text, wordBreak: 'break-word' },
+      errorBox: { padding: 24, margin: 24, border: `1px solid ${C.red}`, borderRadius: 10, background: C.redBg },
       errorPre: { whiteSpace: 'pre-wrap', overflowWrap: 'break-word', fontSize: 12, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },
-      banner: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', margin: '0 24px 12px', padding: '10px 14px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent)', background: 'color-mix(in srgb, var(--dsw-alias-state-warn-primary) 8%, transparent)' },
-      bannerText: { display: 'flex', flexDirection: 'column', gap: 2, fontSize: 13, color: 'var(--dsw-alias-label-primary)' },
       iconWrap: { position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' },
-      iconBadge: { position: 'absolute', top: -8, right: -12, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 999, background: 'var(--dsw-alias-state-error-primary)', color: '#fff', fontSize: 10, lineHeight: '16px', textAlign: 'center', fontWeight: 700 },
-      iconDot: { position: 'absolute', top: -8, right: -10, minWidth: 15, height: 15, padding: '0 3px', borderRadius: 999, background: 'var(--dsw-alias-state-warn-primary)', color: '#fff', fontSize: 10, lineHeight: '15px', textAlign: 'center', fontWeight: 700 },
+      iconBadge: { position: 'absolute', top: -8, right: -12, minWidth: 16, height: 16, padding: '0 3px', borderRadius: 999, background: C.red, color: '#fff', fontSize: 10, lineHeight: '16px', textAlign: 'center', fontWeight: 700 },
+      iconDot: { position: 'absolute', top: -8, right: -10, minWidth: 15, height: 15, padding: '0 3px', borderRadius: 999, background: C.yellowText, color: '#fff', fontSize: 10, lineHeight: '15px', textAlign: 'center', fontWeight: 700 },
     };
 
     function Icon({ size }) {
