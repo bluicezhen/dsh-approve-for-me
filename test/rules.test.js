@@ -29,3 +29,15 @@ test('deny rule wins over allow rule', () => {
   assert.equal(result.verdict, 'denied');
   assert.equal(result.ruleId, 'deny-push');
 });
+
+test('auto-allows commands with common safe output redirections', () => {
+  assert.equal(evaluateCommand('echo hello 2>&1', { workspace: process.cwd() }).verdict, 'auto-allow');
+  assert.equal(evaluateCommand('git diff >/dev/null', { workspace: process.cwd() }).verdict, 'auto-allow');
+  assert.equal(evaluateCommand('cat README.md 2>/dev/null', { workspace: process.cwd() }).verdict, 'auto-allow');
+});
+
+test('still blocks file redirection', () => {
+  const result = evaluateCommand('echo hello > out.txt', { workspace: process.cwd() });
+  assert.equal(result.verdict, 'pending');
+  assert.match(result.reason, /重定向/);
+});

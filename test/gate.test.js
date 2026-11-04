@@ -243,3 +243,75 @@ test('deleting a rule removes it and marks the rule store unconfirmed', async ()
     else process.env.DSH_HOME = previousHome;
   }
 });
+
+test('preview ignores common safe output redirections when generating rules', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'afm-gate-redirect-'));
+  const previousHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = root;
+  try {
+    const { apply } = await import('../index.js');
+    const { ctx, listeners, getRoute } = makeCtx();
+    await apply(ctx, {});
+
+    const preExecute = listeners['tools/pre-execute'];
+    const exec = {
+      name: 'bash',
+      callId: 'call-redirect-1',
+      arguments: { command: 'node ./build.js 2>&1 >/dev/null', workdir: '/tmp/project-redirect' },
+      signal: new AbortController().signal,
+    };
+    const gatePromise = preExecute(exec, async () => ({ kind: 'allow' }));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const stateRes = await callRoute(getRoute(), 'GET', '/api/approve-for-me/state');
+    const approvalId = stateRes.body.queue.pending[0].id;
+
+    const previewRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/preview', { id: approvalId });
+    assert.equal(previewRes.status, 200);
+    assert.equal(previewRes.body.rules.length, 1);
+    assert.equal(previewRes.body.rules[0].program, 'node');
+    assert.deepEqual(previewRes.body.rules[0].args, [{ kind: 'literal', value: './build.js' }]);
+
+    const decisionRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/decision', { id: approvalId, decision: 'deny', scope: 'once' });
+    assert.equal(decisionRes.status, 200);
+    await gatePromise;
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previousHome;
+  }
+});
+
+test('preview explains why an opaque command cannot become a standing rule', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'afm-gate-opaque-'));
+  const previousHome = process.env.DSH_HOME;
+  process.env.DSH_HOME = root;
+  try {
+    const { apply } = await import('../index.js');
+    const { ctx, listeners, getRoute } = makeCtx();
+    await apply(ctx, {});
+
+    const preExecute = listeners['tools/pre-execute'];
+    const exec = {
+      name: 'bash',
+      callId: 'call-opaque-1',
+      arguments: { command: 'node ./build.js > out.log', workdir: '/tmp/project-opaque' },
+      signal: new AbortController().signal,
+    };
+    const gatePromise = preExecute(exec, async () => ({ kind: 'allow' }));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const stateRes = await callRoute(getRoute(), 'GET', '/api/approve-for-me/state');
+    const approvalId = stateRes.body.queue.pending[0].id;
+
+    const previewRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/preview', { id: approvalId });
+    assert.equal(previewRes.status, 400);
+    assert.match(previewRes.body.error, /无法静态判定|无法生成长期放行规则/);
+
+    const decisionRes = await callRoute(getRoute(), 'POST', '/api/approve-for-me/decision', { id: approvalId, decision: 'deny', scope: 'once' });
+    assert.equal(decisionRes.status, 200);
+    await gatePromise;
+  } finally {
+    if (previousHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = previousHome;
+  }
+});

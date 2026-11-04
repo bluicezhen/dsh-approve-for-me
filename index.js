@@ -167,11 +167,20 @@ export async function apply(ctx, config = {}) {
     });
   };
 
+  const describeDraftError = (entry) => {
+    const segments = entry.decision?.segments ?? [];
+    const reason = entry.decision?.reason;
+    if (segments.some((segment) => typeof segment === 'string')) {
+      return `该命令无法生成长期放行规则：${reason ?? '命令包含无法静态判定的构造'}。请使用「仅此次」或「本会话」放行，或改写命令后重试。`;
+    }
+    return '没有可生成的待审批命令段';
+  };
+
   const createPermanentGrant = async (entry, providedRules, requestedTarget) => {
     const target = requestedTarget === 'global' ? 'global' : 'workspace';
     const store = await storeFor(target === 'global' ? undefined : entry.workspace);
     const generatedRules = providedRules === undefined ? draftRulesFor(entry) : normalizeRules(providedRules);
-    if (!generatedRules.length) throw new Error('没有可生成的待审批命令段');
+    if (!generatedRules.length) throw new Error(describeDraftError(entry));
     await store.save([...store.state.rules, ...generatedRules]);
     const confirmedState = await store.confirm();
     return { generatedRules, confirmedState, target };
@@ -216,7 +225,7 @@ export async function apply(ctx, config = {}) {
           const entry = queue.pending.get(body.id);
           if (!entry) return sendJson(res, 404, { ok: false, error: 'approval-not-found' });
           const rules = draftRulesFor(entry);
-          if (!rules.length) return sendJson(res, 400, { ok: false, error: '没有可生成的待审批命令段' });
+          if (!rules.length) return sendJson(res, 400, { ok: false, error: describeDraftError(entry) });
           return sendJson(res, 200, { ok: true, workspace: entry.workspace, defaultTarget: 'workspace', targets: ['workspace', 'global'], rules });
         }
         if (req.method === 'POST' && suffix === '/decision') {

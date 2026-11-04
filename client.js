@@ -50,6 +50,7 @@ window.__ModuleLoader__.load({
       const state = grantState ?? {};
       const busy = state.loading;
       const generated = Array.isArray(state.rules) ? state.rules : null;
+      const grantBlocked = (item.decision?.segments ?? []).some((segment) => typeof segment === 'string');
       return h('div', {
         style: selected ? { ...styles.approvalCard, ...styles.approvalCardSelected } : styles.approvalCard,
         onClick: () => onSelect?.(item.id),
@@ -68,9 +69,12 @@ window.__ModuleLoader__.load({
         !generated && !busy && h('div', { style: styles.actions },
           h(Button, { onClick: act(() => decide(item.id, 'allow', 'once')) }, '仅此次'),
           h(Button, { onClick: act(() => decide(item.id, 'allow', 'session')) }, '本会话'),
-          h(Button, { primary: true, onClick: act(() => previewGrant(item)) }, '长期并锁定规则…'),
+          grantBlocked
+            ? h(Button, { disabled: true, title: '该命令含有无法静态判定的构造，不能生成长期规则' }, '长期并锁定规则…')
+            : h(Button, { primary: true, onClick: act(() => previewGrant(item)) }, '长期并锁定规则…'),
           h(Button, { danger: true, onClick: act(() => decide(item.id, 'deny', 'once')) }, '拒绝'),
         ),
+        grantBlocked && h('div', { style: styles.opaqueHint }, '该命令包含重定向到文件、命令替换等不可判定构造，无法长期放行；可使用「仅此次」或「本会话」。'),
         busy && h('div', { style: styles.actions }, h(Button, { primary: true, disabled: true }, '正在生成并锁定规则…')),
       );
     }
@@ -472,6 +476,7 @@ window.__ModuleLoader__.load({
       approvalTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14 },
       command: { fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)', fontSize: 13, color: C.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
       reason: { fontSize: 12, color: C.muted, margin: '7px 0 0', lineHeight: 1.5 },
+      opaqueHint: { fontSize: 11, color: C.yellowText, marginTop: 8, lineHeight: 1.5 },
       time: { whiteSpace: 'nowrap', color: C.muted, fontSize: 11, flexShrink: 0 },
       actions: { display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 12 },
       button: { border: `1px solid ${C.line}`, borderRadius: 8, padding: '6px 10px', cursor: 'pointer', background: '#ffffff', color: '#24344f', fontFamily: 'inherit', fontSize: 12 },
