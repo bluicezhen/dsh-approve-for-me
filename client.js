@@ -142,8 +142,32 @@ window.__ModuleLoader__.load({
     }
 
     function formatArgs(args) {
-      if (!Array.isArray(args) || args.length === 0) return '任意';
-      return args.map((arg) => typeof arg === 'string' ? arg : `${arg.kind ?? '匹配'}${arg.value ? `=${arg.value}` : ''}`).join(' ');
+      if (!Array.isArray(args) || args.length === 0) return '无参数';
+      if (args.length === 1 && args[0]?.kind === 'rest') return '任意参数';
+      return args.map((arg) => {
+        if (typeof arg === 'string') return arg;
+        if (!arg || typeof arg !== 'object') return String(arg);
+        if (arg.kind === 'literal') return arg.value ?? '';
+        if (arg.kind === 'rest') return '任意参数';
+        if (arg.kind === 'any') return '任意单个参数';
+        if (arg.kind === 'pathWithinWorkspace') return '工作区内路径';
+        return arg.kind ?? '匹配';
+      }).join(' ');
+    }
+
+    function ruleArgsToEditor(args) {
+      const list = Array.isArray(args) ? args : [];
+      if (list.length === 1 && list[0]?.kind === 'rest') return { anyArgs: true, args: [] };
+      return {
+        anyArgs: false,
+        args: list.map((arg) => typeof arg === 'string'
+          ? arg
+          : arg?.kind === 'literal'
+            ? arg.value ?? ''
+            : arg?.kind === 'any'
+              ? '*'
+              : ''),
+      };
     }
 
     function GrantPreviewDialog({ preview, onChangeTarget, onChangeRule, onAddRule, onRemoveRule, onCancel, onConfirm }) {
@@ -181,12 +205,20 @@ window.__ModuleLoader__.load({
               ),
               h('div', { style: styles.argsRow },
                 h('span', { style: styles.editorLabel }, '参数'),
-                rule.args.length === 0 && h('span', { style: styles.editorEmptyArg }, '无参数'),
-                rule.args.map((arg, argIndex) => h('span', { key: argIndex, style: styles.argChip },
-                  h('input', { value: arg, placeholder: '参数值', onChange: (event) => { const args = rule.args.slice(); args[argIndex] = event.target.value; onChangeRule(index, { args }); }, style: styles.argInput }),
-                  h('button', { type: 'button', style: styles.argRemove, onClick: () => { const args = rule.args.slice(); args.splice(argIndex, 1); onChangeRule(index, { args }); }, 'aria-label': '移除参数' }, '×'),
-                )),
-                h('button', { type: 'button', style: styles.addArg, onClick: () => onChangeRule(index, { args: [...rule.args, ''] }) }, '+ 参数'),
+                h('label', { style: styles.anyArgsLabel },
+                  h('input', { type: 'checkbox', checked: !!rule.anyArgs, onChange: (event) => onChangeRule(index, { anyArgs: event.target.checked }), style: styles.anyArgsCheckbox }),
+                  '任意参数',
+                ),
+                rule.anyArgs
+                  ? h('span', { style: styles.editorEmptyArg }, '匹配该程序的任意参数（包括无参数）')
+                  : [
+                    rule.args.length === 0 && h('span', { key: 'empty', style: styles.editorEmptyArg }, '无参数（仅匹配不带参数）'),
+                    ...rule.args.map((arg, argIndex) => h('span', { key: argIndex, style: styles.argChip },
+                      h('input', { value: arg, placeholder: '参数值', onChange: (event) => { const args = rule.args.slice(); args[argIndex] = event.target.value; onChangeRule(index, { args }); }, style: styles.argInput }),
+                      h('button', { type: 'button', style: styles.argRemove, onClick: () => { const args = rule.args.slice(); args.splice(argIndex, 1); onChangeRule(index, { args }); }, 'aria-label': '移除参数' }, '×'),
+                    )),
+                    h('button', { key: 'add', type: 'button', style: styles.addArg, onClick: () => onChangeRule(index, { args: [...rule.args, ''] }) }, '+ 参数'),
+                  ],
               ),
               h('div', { style: styles.editorScope }, '作用域：长期（human）'),
             )),
@@ -268,12 +300,16 @@ window.__ModuleLoader__.load({
                 itemCommand: item.command,
                 workspace: body.workspace ?? item.workspace,
                 target: body.defaultTarget === 'global' ? 'global' : 'workspace',
-                rules: (body.rules ?? []).map((rule) => ({
-                  id: rule.id,
-                  effect: rule.effect === 'deny' ? 'deny' : 'allow',
-                  program: rule.program ?? '',
-                  args: (rule.args ?? []).map((arg) => typeof arg === 'string' ? arg : arg?.kind === 'literal' ? arg.value : ''),
-                })),
+                rules: (body.rules ?? []).map((rule) => {
+                  const editor = ruleArgsToEditor(rule.args);
+                  return {
+                    id: rule.id,
+                    effect: rule.effect === 'deny' ? 'deny' : 'allow',
+                    program: rule.program ?? '',
+                    anyArgs: editor.anyArgs,
+                    args: editor.args,
+                  };
+                }),
                 error: null,
                 saving: false,
                 loading: false,
@@ -291,7 +327,7 @@ window.__ModuleLoader__.load({
         setPreview((prev) => prev ? { ...prev, error: null, rules: prev.rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule) } : prev);
       };
       const addPreviewRule = () => {
-        setPreview((prev) => prev ? { ...prev, error: null, rules: [...prev.rules, { id: `human-${Date.now()}-${prev.rules.length + 1}`, effect: 'allow', program: '', args: [] }] } : prev);
+        setPreview((prev) => prev ? { ...prev, error: null, rules: [...prev.rules, { id: `human-${Date.now()}-${prev.rules.length + 1}`, effect: 'allow', program: '', anyArgs: false, args: [] }] } : prev);
       };
       const removePreviewRule = (index) => {
         setPreview((prev) => prev ? { ...prev, rules: prev.rules.filter((_, i) => i !== index) } : prev);
@@ -311,7 +347,7 @@ window.__ModuleLoader__.load({
           id: rule.id || `human-${Date.now()}-${index + 1}`,
           effect: rule.effect === 'deny' ? 'deny' : 'allow',
           program: rule.program.trim(),
-          args: rule.args.map((value) => ({ kind: 'literal', value })),
+          args: rule.anyArgs ? [{ kind: 'rest' }] : rule.args.map((value) => ({ kind: 'literal', value })),
         }));
         setPreview((prev) => prev ? { ...prev, saving: true, error: null } : prev);
         return fetch(`${API}/decision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: itemId, decision: 'allow', scope: 'permanent', rules, target }) })
@@ -588,6 +624,8 @@ window.__ModuleLoader__.load({
       textButton: { border: 0, background: 'transparent', color: C.red, fontSize: 12, cursor: 'pointer', padding: '4px 6px' },
       argsRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 },
       editorLabel: { fontSize: 11, color: C.muted, fontWeight: 600 },
+      anyArgsLabel: { display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.text, cursor: 'pointer' },
+      anyArgsCheckbox: { margin: 0 },
       editorEmptyArg: { fontSize: 12, color: C.muted },
       argChip: { display: 'inline-flex', alignItems: 'center', border: `1px solid ${C.line}`, borderRadius: 7, background: '#ffffff', overflow: 'hidden' },
       argInput: { border: 0, outline: 'none', background: 'transparent', color: C.text, fontSize: 12, padding: '6px 8px', width: 110, fontFamily: 'var(--dsw-alias-mono-font-family, ui-monospace, SFMono-Regular, Menlo, monospace)' },

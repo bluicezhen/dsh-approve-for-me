@@ -54,3 +54,15 @@ test('keeps per-segment verdicts so the UI can explain the blocker', () => {
   assert.match(sedSegment.reason, /没有命中放行规则/);
   assert.equal(echoSegment.verdict, 'auto-allow');
 });
+
+test('empty args means no arguments, not a wildcard', () => {
+  const rule = { id: 'cd-empty', effect: 'allow', program: 'cd', args: [] };
+  assert.equal(evaluateSegment('cd', ['cd'], { rules: [rule] }).verdict, 'auto-allow');
+  assert.equal(evaluateSegment('cd /tmp', ['cd', '/tmp'], { rules: [rule] }).verdict, 'pending');
+});
+
+test('rest args matches arbitrary arguments', () => {
+  const rule = { id: 'cd-any', effect: 'allow', program: 'cd', args: [{ kind: 'rest' }] };
+  assert.equal(evaluateSegment('cd /tmp', ['cd', '/tmp'], { rules: [rule] }).verdict, 'auto-allow');
+  assert.equal(evaluateSegment('cd', ['cd'], { rules: [rule] }).verdict, 'auto-allow');
+});
